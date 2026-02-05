@@ -19,6 +19,7 @@ import com.kaanelloed.iconeration.constants.SuppressDeprecation
 import com.kaanelloed.iconeration.constants.SuppressSameParameterValue
 import com.kaanelloed.iconeration.data.InstalledApplication
 import com.kaanelloed.iconeration.extension.getBytes
+import com.kaanelloed.iconeration.icon.BitmapIcon
 import com.kaanelloed.iconeration.icon.EmptyIcon
 import com.kaanelloed.iconeration.icon.VectorIcon
 import com.kaanelloed.iconeration.packages.ApplicationManager
@@ -62,6 +63,11 @@ class IconPackBuilder(
     private val newInternalVersionCode = 0
     private val frameworkVersion = 34
     private val minSdkVersion = 21
+
+    companion object {
+        // Batch size for processing icons to avoid OOM with many installed apps
+        const val ICON_BATCH_SIZE = 50
+    }
 
     fun canBeInstalled(): Boolean {
         val installedVersion = getInstalledVersion()
@@ -123,8 +129,12 @@ class IconPackBuilder(
 
         val vectorBrush = ReferenceBrush("@color/icon_color")
 
-        for (app in apps) {
-            if (app.createdIcon !is EmptyIcon) {
+        // Process apps in batches to avoid OOM with many installed apps
+        val batchSize = ICON_BATCH_SIZE
+        val appsWithIcons = apps.filter { it.createdIcon !is EmptyIcon }
+
+        for ((batchIndex, batch) in appsWithIcons.chunked(batchSize).withIndex()) {
+            for (app in batch) {
                 val appFileName = app.getFileName()
 
                 val exportAsAdaptive = themed || app.createdIcon.exportAsAdaptiveIcon
@@ -139,16 +149,26 @@ class IconPackBuilder(
                         createXmlDrawableResource(apkModule, packageBlock, vector.toXmlFile(), appFileName + "_foreground")
                     }
                     else {
-                        createBitmapResource(apkModule, packageBlock, app.createdIcon.toBitmap(), appFileName + "_foreground")
+                        // VectorIcon.toBitmap() creates a new bitmap each time, safe to recycle
+                        // BitmapIcon.toBitmap() returns internal bitmap, must NOT recycle
+                        val canRecycle = app.createdIcon !is BitmapIcon
+                        createBitmapResource(apkModule, packageBlock, app.createdIcon.toBitmap(), appFileName + "_foreground", recycleBitmap = canRecycle)
                     }
 
                     createXmlDrawableResource(apkModule, packageBlock, adaptive, appFileName)
                 }
-                else
-                    createBitmapResource(apkModule, packageBlock, app.createdIcon.toBitmap(), appFileName)
+                else {
+                    val canRecycle = app.createdIcon !is BitmapIcon
+                    createBitmapResource(apkModule, packageBlock, app.createdIcon.toBitmap(), appFileName, recycleBitmap = canRecycle)
+                }
 
                 drawableXml.item(appFileName)
                 appfilterXml.item(app.packageName, app.activityName, appFileName)
+            }
+
+            // Hint GC to run after each batch to free up memory from recycled bitmaps
+            if (batchIndex < appsWithIcons.chunked(batchSize).size - 1) {
+                System.gc()
             }
         }
 
@@ -299,7 +319,7 @@ class IconPackBuilder(
         return createBitmapResource(apkModule, packageBlock, bitmap, name, qualifier, type)
     }
 
-    private fun createBitmapResource(apkModule: ApkModule, packageBlock: PackageBlock, bitmap: Bitmap, name: String, qualifier: String = "", type: String = "drawable"): Entry {
+    private fun createBitmapResource(apkModule: ApkModule, packageBlock: PackageBlock, bitmap: Bitmap, name: String, qualifier: String = "", type: String = "drawable", recycleBitmap: Boolean = false): Entry {
         val extension = if (PackageVersion.is29OrMore()) "webp" else "png" //Lossless webp since sdk 29
         val resPath = "res/$name$qualifier.$extension"
 
@@ -307,6 +327,12 @@ class IconPackBuilder(
         icon.setValueAsString(resPath)
 
         apkModule.add(generateBitmap(bitmap, resPath))
+
+        // Recycle the bitmap to free memory if it's safe to do so (not a shared reference)
+        if (recycleBitmap && !bitmap.isRecycled) {
+            bitmap.recycle()
+        }
+
         return icon
     }
 
