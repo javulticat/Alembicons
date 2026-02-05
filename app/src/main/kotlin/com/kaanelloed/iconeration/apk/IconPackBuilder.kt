@@ -176,9 +176,20 @@ class IconPackBuilder(
             appfilterXml.calendar(calendarIcon.key.packageName, calendarIcon.key.activityName, calendarIcon.value)
         }
 
-        for (drawable in calendarIconsDrawable) {
-            createBitmapResource(apkModule, packageBlock, drawable.value.toBitmap(), drawable.key)
-            drawableXml.item(drawable.key)
+        // Process calendar icons in batches to avoid OOM
+        // Each calendar app has 31 day icons, so multiple calendar apps can quickly accumulate
+        // Drawable.toBitmap() creates new bitmaps each time, so they are safe to recycle
+        val calendarDrawablesList = calendarIconsDrawable.entries.toList()
+        for ((batchIndex, batch) in calendarDrawablesList.chunked(ICON_BATCH_SIZE).withIndex()) {
+            for (drawable in batch) {
+                createBitmapResource(apkModule, packageBlock, drawable.value.toBitmap(), drawable.key, recycleBitmap = true)
+                drawableXml.item(drawable.key)
+            }
+
+            // Hint GC to run after each batch to free up memory from recycled bitmaps
+            if (batchIndex < calendarDrawablesList.chunked(ICON_BATCH_SIZE).size - 1) {
+                System.gc()
+            }
         }
 
         apkModule.add(ByteInputSource(drawableXml.getBytes(), "assets/drawable.xml"))

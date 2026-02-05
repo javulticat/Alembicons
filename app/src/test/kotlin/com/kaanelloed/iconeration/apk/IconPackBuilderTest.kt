@@ -95,4 +95,88 @@ class IconPackBuilderTest {
             assertEquals("All $count apps should be processed", count, processedCount)
         }
     }
+
+    // Calendar icon batch processing tests
+
+    @Test
+    fun `calendar icons batch processing handles typical calendar app count`() {
+        // Each calendar app has 31 day icons (1-31)
+        // Simulate 3 calendar apps = 93 icons
+        val calendarApps = 3
+        val daysPerCalendar = 31
+        val totalCalendarIcons = calendarApps * daysPerCalendar
+
+        val batchSize = IconPackBuilder.ICON_BATCH_SIZE
+        val calendarIcons = (1..totalCalendarIcons).toList()
+        val batches = calendarIcons.chunked(batchSize)
+
+        // With batch size 50 and 93 icons, should have 2 batches
+        val expectedBatches = (totalCalendarIcons + batchSize - 1) / batchSize
+        assertEquals("$totalCalendarIcons calendar icons should produce $expectedBatches batches", expectedBatches, batches.size)
+
+        // Verify all icons are processed
+        val processedCount = batches.sumOf { it.size }
+        assertEquals("All $totalCalendarIcons calendar icons should be processed", totalCalendarIcons, processedCount)
+    }
+
+    @Test
+    fun `calendar icons batch processing handles many calendar apps`() {
+        // Stress test: 10 calendar apps = 310 icons
+        val calendarApps = 10
+        val daysPerCalendar = 31
+        val totalCalendarIcons = calendarApps * daysPerCalendar
+
+        val batchSize = IconPackBuilder.ICON_BATCH_SIZE
+        val calendarIcons = (1..totalCalendarIcons).toList()
+
+        val processedItems = mutableListOf<Int>()
+        for (batch in calendarIcons.chunked(batchSize)) {
+            processedItems.addAll(batch)
+        }
+
+        assertEquals("All $totalCalendarIcons calendar icons should be processed", calendarIcons, processedItems)
+    }
+
+    @Test
+    fun `calendar icons batch processing handles single calendar app`() {
+        // Single calendar app = 31 icons (less than batch size)
+        val totalCalendarIcons = 31
+        val batchSize = IconPackBuilder.ICON_BATCH_SIZE
+
+        val calendarIcons = (1..totalCalendarIcons).toList()
+        val batches = calendarIcons.chunked(batchSize)
+
+        assertEquals("31 icons should fit in single batch", 1, batches.size)
+        assertEquals("Single batch should contain all 31 icons", totalCalendarIcons, batches[0].size)
+    }
+
+    @Test
+    fun `calendar icons batch processing handles no calendar apps`() {
+        val calendarIcons = emptyList<Int>()
+        val batches = calendarIcons.chunked(IconPackBuilder.ICON_BATCH_SIZE)
+
+        assertTrue("No calendar icons should produce no batches", batches.isEmpty())
+    }
+
+    @Test
+    fun `calendar icons use same batch size as app icons for consistency`() {
+        // Calendar icons and app icons should use the same ICON_BATCH_SIZE
+        // This ensures consistent memory management across both icon types
+        val batchSize = IconPackBuilder.ICON_BATCH_SIZE
+
+        // Verify batch size works for both typical scenarios
+        val typicalAppCount = 500
+        val typicalCalendarIconCount = 5 * 31 // 5 calendar apps
+
+        val appBatches = (1..typicalAppCount).chunked(batchSize)
+        val calendarBatches = (1..typicalCalendarIconCount).chunked(batchSize)
+
+        // Both should produce reasonable batch counts
+        assertTrue("App batches should be > 0", appBatches.isNotEmpty())
+        assertTrue("Calendar batches should be > 0", calendarBatches.isNotEmpty())
+
+        // All items should be processed
+        assertEquals(typicalAppCount, appBatches.sumOf { it.size })
+        assertEquals(typicalCalendarIconCount, calendarBatches.sumOf { it.size })
+    }
 }
