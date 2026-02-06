@@ -325,30 +325,42 @@ class ApplicationProvider(private val context: Context) {
             AlchemiconPackDatabase::class.java, "alchemiconPack"
         ).build()
 
-        val dbApps = mutableListOf<DbApplication>()
-
-        for (app in applicationList) {
-            if (app.createdIcon !is EmptyIcon) {
-                val isXml = app.createdIcon is VectorIcon
-
-                dbApps.add(
-                    DbApplication(
-                        app.packageName,
-                        app.activityName,
-                        app.createdIcon.exportAsAdaptiveIcon,
-                        isXml,
-                        app.createdIcon.toDbString()
-                    )
-                )
-            }
-        }
-
         val packDao = db.alchemiconPackDao()
 
+        // Delete all existing entries first
         packDao.deleteAllApplications()
-        packDao.insertAll(dbApps)
+
+        // Process apps in batches to avoid OOM with many installed apps
+        // Converting icons to Base64 strings is memory-intensive
+        val batchSize = DB_SAVE_BATCH_SIZE
+        val appsWithIcons = applicationList.filter { it.createdIcon !is EmptyIcon }
+
+        for (batch in appsWithIcons.chunked(batchSize)) {
+            val dbApps = batch.map { app ->
+                val isXml = app.createdIcon is VectorIcon
+                DbApplication(
+                    app.packageName,
+                    app.activityName,
+                    app.createdIcon.exportAsAdaptiveIcon,
+                    isXml,
+                    app.createdIcon.toDbString()
+                )
+            }
+
+            // Insert this batch
+            packDao.insertAll(dbApps)
+
+            // Hint GC to free memory from Base64 string conversions
+            System.gc()
+        }
 
         db.close()
+    }
+
+    companion object {
+        // Batch size for saving icons to database to avoid OOM
+        // Each icon's Base64 string can be 50-100KB
+        const val DB_SAVE_BATCH_SIZE = 25
     }
 
     private fun getAppFilterElements() {
