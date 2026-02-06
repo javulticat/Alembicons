@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build a release from (e.g. v2025.02.00)'
+        description: 'Existing tag to build a release from (e.g. 2026.02.00)'
         required: true
 
 concurrency:
