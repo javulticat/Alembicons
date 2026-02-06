@@ -59,6 +59,16 @@ android {
         // Disables dependency metadata when building Android App Bundles.
         includeInBundle = false
     }
+
+    lint {
+        // Generate baseline for existing issues on first run
+        baseline = file("lint-baseline.xml")
+        // Generate reports for CI
+        htmlReport = true
+        xmlReport = true
+        // Don't treat warnings as errors
+        warningsAsErrors = false
+    }
 }
 
 java {
