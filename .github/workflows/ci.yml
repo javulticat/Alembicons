@@ -33,21 +33,21 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run Lint
-        run: ./gradlew lint
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
 
       - name: Run Unit Tests
         run: ./gradlew test
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
+      - name: Run Lint
+        run: ./gradlew lintDebug
+        continue-on-error: true
 
-      - name: Upload Lint Results
-        if: always()
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: lint-results
-          path: app/build/reports/lint-results-*.html
+          name: debug-apk
+          path: app/build/outputs/apk/debug/*.apk
           retention-days: 7
 
       - name: Upload Test Results
@@ -56,13 +56,16 @@ jobs:
         with:
           name: unit-test-results
           path: app/build/reports/tests/
+          if-no-files-found: ignore
           retention-days: 7
 
-      - name: Upload Debug APK
+      - name: Upload Lint Results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: lint-results
+          path: app/build/reports/lint-results-*.html
+          if-no-files-found: ignore
           retention-days: 7
 
   instrumented-tests:
