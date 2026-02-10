@@ -13,6 +13,9 @@ import com.kaanelloed.iconeration.packages.PackageVersion
 
 class DrawableExtension {
     companion object {
+        const val MAX_ICON_LIST_SIZE = 256
+        const val MAX_ICON_PROCESS_SIZE = 500
+
         fun Drawable.shrinkIfBiggerThan(size: Int): Bitmap {
             val maxWidthOrHeight = kotlin.math.max(this.intrinsicWidth, this.intrinsicHeight)
             if (maxWidthOrHeight > size) {

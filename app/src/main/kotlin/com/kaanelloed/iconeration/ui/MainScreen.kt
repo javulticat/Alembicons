@@ -48,7 +48,6 @@ import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.core.graphics.drawable.toBitmap
 import com.kaanelloed.iconeration.packages.PackageInfoStruct
 import com.kaanelloed.iconeration.R
 import com.kaanelloed.iconeration.data.BackgroundColorKey
@@ -60,6 +59,8 @@ import com.kaanelloed.iconeration.data.getColorValue
 import com.kaanelloed.iconeration.data.getDefaultBackgroundColor
 import com.kaanelloed.iconeration.data.getPreferencesValue
 import com.kaanelloed.iconeration.data.getStringValue
+import com.kaanelloed.iconeration.drawable.DrawableExtension
+import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.shrinkIfBiggerThan
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.sizeIsGreaterThanZero
 import com.kaanelloed.iconeration.icon.EmptyIcon
 import kotlinx.coroutines.CoroutineScope
@@ -108,7 +109,7 @@ fun ApplicationItem(iconPacks: List<IconPack>, app: PackageInfoStruct, index: In
     Row(modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically) {
         if (app.icon.sizeIsGreaterThanZero()) {
-            Image(painter = BitmapPainter(app.icon.toBitmap().asImageBitmap())
+            Image(painter = BitmapPainter(app.icon.shrinkIfBiggerThan(DrawableExtension.MAX_ICON_LIST_SIZE).asImageBitmap())
                 , contentDescription = null
                 //, contentScale = ContentScale.Inside
                 , modifier = Modifier

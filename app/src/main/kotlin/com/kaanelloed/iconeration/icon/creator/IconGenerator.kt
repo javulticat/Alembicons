@@ -22,6 +22,7 @@ import com.kaanelloed.iconeration.data.ImageEdit
 import com.kaanelloed.iconeration.data.Source
 import com.kaanelloed.iconeration.data.TextType
 import com.kaanelloed.iconeration.drawable.BaseTextDrawable
+import com.kaanelloed.iconeration.drawable.DrawableExtension
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.isAdaptiveIconDrawable
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.shrinkIfBiggerThan
 import com.kaanelloed.iconeration.drawable.ForegroundIconDrawable
@@ -370,7 +371,7 @@ class IconGenerator(
         return builder.build()
     }
 
-    private fun getIconBitmap(icon: Drawable, maxSize: Int = 500): Bitmap {
+    private fun getIconBitmap(icon: Drawable, maxSize: Int = DrawableExtension.MAX_ICON_PROCESS_SIZE): Bitmap {
         return if (icon.isAdaptiveIconDrawable()) {
             icon as AdaptiveIconDrawable
             icon.foreground.shrinkIfBiggerThan(maxSize)
