@@ -1,0 +1,2 @@
+Fixed
+- Fix crash caused by oversized bitmaps when scrolling the app icon list
