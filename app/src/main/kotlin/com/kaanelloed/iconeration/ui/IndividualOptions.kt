@@ -89,6 +89,7 @@ import com.kaanelloed.iconeration.data.IconPack
 import com.kaanelloed.iconeration.data.ImageEdit
 import com.kaanelloed.iconeration.data.Source
 import com.kaanelloed.iconeration.data.TextType
+import com.kaanelloed.iconeration.drawable.DrawableExtension
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.shrinkIfBiggerThan
 import com.kaanelloed.iconeration.drawable.ResourceDrawable
 import com.kaanelloed.iconeration.extension.toDrawable
@@ -364,7 +365,7 @@ fun UploadColumn(app: PackageInfoStruct,
     var modifiedImage by remember { mutableStateOf(null as Bitmap?) }
     var mask by remember { mutableStateOf(null as Bitmap?) }
     var iconColor by rememberSaveable(saver = colorSaver()) { mutableStateOf(Color.White) }
-    val maxSize = 500
+    val maxSize = DrawableExtension.MAX_ICON_PROCESS_SIZE
 
     val activity = getCurrentMainActivity()
     val context = getCurrentContext()

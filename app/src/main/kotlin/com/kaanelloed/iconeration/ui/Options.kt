@@ -84,6 +84,7 @@ import com.kaanelloed.iconeration.data.setBooleanValue
 import com.kaanelloed.iconeration.data.setColorValue
 import com.kaanelloed.iconeration.data.setEnumValue
 import com.kaanelloed.iconeration.data.setStringValue
+import com.kaanelloed.iconeration.drawable.DrawableExtension
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.shrinkIfBiggerThan
 import com.kaanelloed.iconeration.drawable.ResourceDrawable
 import com.kaanelloed.iconeration.icon.BitmapIcon
@@ -552,7 +553,7 @@ fun IconPackDropdown(
                     trailingIcon = {
                         if (icon != null) {
                             Image(
-                                painter = BitmapIcon(icon.value.drawable.shrinkIfBiggerThan(500)).getPainter(),
+                                painter = BitmapIcon(icon.value.drawable.shrinkIfBiggerThan(DrawableExtension.MAX_ICON_PROCESS_SIZE)).getPainter(),
                                 contentDescription = null,
                                 modifier = Modifier.size(50.dp)
                             )
