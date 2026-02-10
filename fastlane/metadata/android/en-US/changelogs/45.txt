@@ -1,0 +1,3 @@
+Fixed
+- Prevent out-of-memory crash when saving icons on devices with many apps
+- Prevent out-of-memory crash when processing calendar icons
