@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
@@ -85,12 +84,28 @@ fun MainColumn(iconPacks: List<IconPack>) {
 @Composable
 fun ApplicationList(iconPacks: List<IconPack>, filter: String) {
     val activity = getCurrentMainActivity()
+    val allApps = activity.appProvider.applicationList
+
+    // Pre-filter the list so LazyColumn only measures/composes visible items.
+    // Filtering inside itemsIndexed created empty composable slots for every
+    // hidden item, defeating LazyColumn's virtualization with 500+ apps.
+    val filteredApps = remember(allApps, filter) {
+        if (filter.isEmpty()) {
+            allApps.mapIndexed { index, app -> index to app }
+        } else {
+            allApps.mapIndexedNotNull { index, app ->
+                if (app.appName.contains(filter, true)) index to app else null
+            }
+        }
+    }
 
     LazyColumn {
-        itemsIndexed(activity.appProvider.applicationList) { index, app ->
-            if (app.appName.contains(filter, true)) {
-                ApplicationItem(iconPacks, app, index)
-            }
+        items(
+            count = filteredApps.size,
+            key = { i -> val (_, app) = filteredApps[i]; "${app.packageName}/${app.activityName}" }
+        ) { i ->
+            val (originalIndex, app) = filteredApps[i]
+            ApplicationItem(iconPacks, app, originalIndex)
         }
     }
 }
@@ -109,7 +124,12 @@ fun ApplicationItem(iconPacks: List<IconPack>, app: PackageInfoStruct, index: In
     Row(modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically) {
         if (app.icon.sizeIsGreaterThanZero()) {
-            Image(painter = BitmapPainter(app.icon.shrinkIfBiggerThan(DrawableExtension.MAX_ICON_LIST_SIZE).asImageBitmap())
+            // Cache the shrunk bitmap to avoid re-allocating on every recomposition.
+            // The Drawable identity is stable per app, so this is safe to key on.
+            val shrunkBitmap = remember(app.icon) {
+                app.icon.shrinkIfBiggerThan(DrawableExtension.MAX_ICON_LIST_SIZE).asImageBitmap()
+            }
+            Image(painter = BitmapPainter(shrunkBitmap)
                 , contentDescription = null
                 //, contentScale = ContentScale.Inside
                 , modifier = Modifier
