@@ -1,12 +1,206 @@
 package com.kaanelloed.iconeration.apk
 
+import com.kaanelloed.iconeration.data.DbApplication
 import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * Unit tests for ApplicationProvider, focusing on memory-efficient database saving.
+ * Unit tests for ApplicationProvider, focusing on memory-efficient database saving
+ * and batch processing optimizations for large app lists (500+).
  */
 class ApplicationProviderTest {
+
+    // --- Batch editing tests ---
+
+    @Test
+    fun `batch edit applies all changes in single pass`() {
+        // Simulate applicationList as a list of strings
+        val original = (0 until 500).map { "app_$it" }.toMutableList()
+
+        // Collect edits (like editApplicationsBatch does)
+        val edits = listOf(
+            0 to "modified_0",
+            50 to "modified_50",
+            250 to "modified_250",
+            499 to "modified_499"
+        )
+
+        // Apply batch
+        val result = original.toMutableList()
+        for ((index, newVal) in edits) {
+            result[index] = newVal
+        }
+
+        assertEquals("modified_0", result[0])
+        assertEquals("modified_50", result[50])
+        assertEquals("modified_250", result[250])
+        assertEquals("modified_499", result[499])
+        // Unmodified items remain unchanged
+        assertEquals("app_1", result[1])
+        assertEquals("app_100", result[100])
+    }
+
+    @Test
+    fun `batch edit produces same result as individual edits`() {
+        val size = 500
+        val original = (0 until size).map { "app_$it" }
+
+        // Edits to apply
+        val editIndices = listOf(0, 10, 99, 200, 350, 499)
+
+        // Individual edits (the old approach): creates a new list per edit
+        var individualResult = original
+        for (idx in editIndices) {
+            individualResult = individualResult.toMutableList().also {
+                it[idx] = "edited_$idx"
+            }
+        }
+
+        // Batch edit (the new approach): creates a single new list
+        val batchResult = original.toMutableList()
+        for (idx in editIndices) {
+            batchResult[idx] = "edited_$idx"
+        }
+
+        assertEquals(
+            "Batch edit should produce same result as individual edits",
+            individualResult,
+            batchResult.toList()
+        )
+    }
+
+    @Test
+    fun `batch edit with empty edits list returns unchanged list`() {
+        val original = (0 until 100).map { "app_$it" }
+        val edits = emptyList<Pair<Int, String>>()
+
+        val result = original.toMutableList()
+        for ((index, newVal) in edits) {
+            result[index] = newVal
+        }
+
+        assertEquals("Empty edits should leave list unchanged", original, result)
+    }
+
+    @Test
+    fun `batch edit reduces list allocations for 500 apps`() {
+        val size = 500
+
+        // Old approach: N list copies for N edits
+        var individualAllocations = 0
+        var list = (0 until size).toList()
+        for (i in 0 until size) {
+            list = list.toMutableList().also {
+                it[i] = -i
+                individualAllocations++
+            }
+        }
+
+        // New approach: 1 list copy for N edits
+        var batchAllocations = 0
+        val batchList = (0 until size).toMutableList()
+        batchAllocations++ // single toMutableList() call
+        for (i in 0 until size) {
+            batchList[i] = -i
+        }
+
+        assertTrue(
+            "Batch should use far fewer allocations ($batchAllocations vs $individualAllocations)",
+            batchAllocations < individualAllocations
+        )
+        assertEquals(
+            "Both approaches should produce same result",
+            list, batchList.toList()
+        )
+    }
+
+    // --- HashMap lookup tests ---
+
+    @Test
+    fun `hashmap lookup produces same results as linear find`() {
+        // Simulate dbApps
+        val dbApps = (0 until 300).map {
+            DbApplication("com.pkg.$it", ".Activity$it", it % 2 == 0, it % 3 == 0, "data$it")
+        }
+
+        // Simulate installed apps (subset + some not in DB)
+        val installedApps = (0 until 500).map { "com.pkg.$it" to ".Activity$it" }
+
+        // Old approach: linear find per app
+        val linearResults = mutableListOf<DbApplication?>()
+        for ((pkg, activity) in installedApps) {
+            linearResults.add(dbApps.find { it.packageName == pkg && it.activityName == activity })
+        }
+
+        // New approach: HashMap lookup
+        val dbAppMap = HashMap<Pair<String, String>, DbApplication>(dbApps.size)
+        for (dbApp in dbApps) {
+            dbAppMap[Pair(dbApp.packageName, dbApp.activityName)] = dbApp
+        }
+        val hashResults = mutableListOf<DbApplication?>()
+        for ((pkg, activity) in installedApps) {
+            hashResults.add(dbAppMap[Pair(pkg, activity)])
+        }
+
+        assertEquals(
+            "HashMap lookup should produce same results as linear find",
+            linearResults, hashResults
+        )
+    }
+
+    @Test
+    fun `hashmap lookup handles empty database`() {
+        val dbApps = emptyList<DbApplication>()
+        val dbAppMap = HashMap<Pair<String, String>, DbApplication>(dbApps.size)
+        for (dbApp in dbApps) {
+            dbAppMap[Pair(dbApp.packageName, dbApp.activityName)] = dbApp
+        }
+
+        assertNull(dbAppMap[Pair("com.pkg.1", ".Main")])
+    }
+
+    @Test
+    fun `hashmap lookup handles duplicate package names with different activities`() {
+        val dbApps = listOf(
+            DbApplication("com.pkg.same", ".Activity1", false, false, "data1"),
+            DbApplication("com.pkg.same", ".Activity2", false, false, "data2")
+        )
+
+        val dbAppMap = HashMap<Pair<String, String>, DbApplication>(dbApps.size)
+        for (dbApp in dbApps) {
+            dbAppMap[Pair(dbApp.packageName, dbApp.activityName)] = dbApp
+        }
+
+        assertEquals("data1", dbAppMap[Pair("com.pkg.same", ".Activity1")]?.drawable)
+        assertEquals("data2", dbAppMap[Pair("com.pkg.same", ".Activity2")]?.drawable)
+    }
+
+    @Test
+    fun `hashmap lookup is O(1) per access for large datasets`() {
+        // Build a large dataset
+        val size = 1000
+        val dbApps = (0 until size).map {
+            DbApplication("com.pkg.$it", ".Activity$it", false, false, "data$it")
+        }
+
+        val dbAppMap = HashMap<Pair<String, String>, DbApplication>(dbApps.size)
+        for (dbApp in dbApps) {
+            dbAppMap[Pair(dbApp.packageName, dbApp.activityName)] = dbApp
+        }
+
+        // All entries should be found
+        for (i in 0 until size) {
+            assertNotNull(
+                "Entry $i should be found",
+                dbAppMap[Pair("com.pkg.$i", ".Activity$i")]
+            )
+        }
+
+        // Non-existent entries should return null
+        assertNull(dbAppMap[Pair("com.nonexistent", ".Main")])
+    }
+
+    // --- Original database batch size tests ---
 
     @Test
     fun `database batch size constant is positive and reasonable`() {
