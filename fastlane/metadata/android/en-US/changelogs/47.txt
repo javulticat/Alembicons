@@ -1,0 +1,4 @@
+Fixed
+- Fix stuttering and crashes on devices with 500+ apps
+- Move app loading off the main thread to prevent UI freezing during startup
+- Reduce memory usage by caching bitmaps and batching list operations
