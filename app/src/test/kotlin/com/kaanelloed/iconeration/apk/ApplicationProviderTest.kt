@@ -200,6 +200,136 @@ class ApplicationProviderTest {
         assertNull(dbAppMap[Pair("com.nonexistent", ".Main")])
     }
 
+    // --- refreshIcons index lookup tests ---
+    // refreshIcons() uses HashMap<PackageInfoStruct, Int> for O(1) index access.
+    // PackageInfoStruct.hashCode() uses (packageName, activityName).
+    // PackageInfoStruct.equals() uses (packageName, activityName, internalVersion).
+    // These tests verify the lookup contract using a simulation of that behavior.
+
+    /**
+     * Simulates PackageInfoStruct's hashCode/equals contract for HashMap testing.
+     * hashCode: packageName + activityName (mirrors PackageInfoStruct.hashCode)
+     * equals: packageName + activityName + internalVersion (mirrors PackageInfoStruct.equals)
+     */
+    private class AppKey(
+        val packageName: String,
+        val activityName: String,
+        val internalVersion: Int = 0
+    ) {
+        override fun hashCode(): Int {
+            var result = packageName.hashCode()
+            result = 31 * result + activityName.hashCode()
+            return result
+        }
+
+        override fun equals(other: Any?): Boolean {
+            if (other is AppKey) {
+                return packageName == other.packageName
+                    && activityName == other.activityName
+                    && internalVersion == other.internalVersion
+            }
+            return false
+        }
+
+        fun changeExport(): AppKey {
+            return AppKey(packageName, activityName, internalVersion + 1)
+        }
+    }
+
+    @Test
+    fun `refreshIcons index map finds exact same reference`() {
+        // Replicates: val appIndexMap = HashMap<PackageInfoStruct, Int>()
+        val apps = (0 until 500).map {
+            AppKey("com.pkg.$it", ".Activity$it")
+        }
+
+        val appIndexMap = HashMap<AppKey, Int>(apps.size)
+        for ((index, app) in apps.withIndex()) {
+            appIndexMap[app] = index
+        }
+
+        // generateIcons callback receives the same object reference
+        for ((expectedIndex, app) in apps.withIndex()) {
+            val foundIndex = appIndexMap[app]
+            assertNotNull("App at index $expectedIndex should be found", foundIndex)
+            assertEquals(expectedIndex, foundIndex)
+        }
+    }
+
+    @Test
+    fun `changeExport produces non-equal object with incremented version`() {
+        val original = AppKey("com.pkg.test", ".Main", 0)
+        val changed = original.changeExport()
+
+        assertNotEquals(
+            "changeExport should produce a different object (different internalVersion)",
+            original, changed
+        )
+        assertEquals("Package name should be preserved", original.packageName, changed.packageName)
+        assertEquals("Activity name should be preserved", original.activityName, changed.activityName)
+        assertEquals("Internal version should increment", original.internalVersion + 1, changed.internalVersion)
+    }
+
+    @Test
+    fun `changed object has same hashCode but is not equal to original`() {
+        // This verifies the hashCode/equals asymmetry in PackageInfoStruct:
+        // hashCode uses only (packageName, activityName)
+        // equals also checks internalVersion
+        val original = AppKey("com.pkg.test", ".Main", 0)
+        val changed = original.changeExport()
+
+        assertEquals(
+            "Same packageName + activityName should produce same hashCode",
+            original.hashCode(), changed.hashCode()
+        )
+        assertNotEquals(
+            "Different internalVersion should make objects not equal",
+            original, changed
+        )
+    }
+
+    @Test
+    fun `refreshIcons index map correctly handles batch collection pattern`() {
+        // Full simulation of the refreshIcons batch pattern:
+        // 1. Build index map from original list
+        // 2. Generate icons (callback receives original objects)
+        // 3. Create edits pairing original index with changeExport() result
+        // 4. Apply batch edits
+
+        val apps = (0 until 500).map {
+            AppKey("com.pkg.$it", ".Activity$it")
+        }
+
+        // Step 1: Build index map
+        val appIndexMap = HashMap<AppKey, Int>(apps.size)
+        for ((index, app) in apps.withIndex()) {
+            appIndexMap[app] = index
+        }
+
+        // Step 2-3: Simulate generateIcons callback
+        val edits = mutableListOf<Pair<Int, AppKey>>()
+        for (app in apps) {
+            val index = appIndexMap[app]
+            if (index != null) {
+                edits.add(Pair(index, app.changeExport()))
+            }
+        }
+
+        assertEquals("All 500 apps should produce edits", 500, edits.size)
+
+        // Step 4: Apply batch
+        val result = apps.toMutableList()
+        for ((index, newApp) in edits) {
+            result[index] = newApp
+        }
+
+        // Verify all items were updated
+        for ((index, app) in result.withIndex()) {
+            assertEquals("com.pkg.$index", app.packageName)
+            assertEquals(1, app.internalVersion) // incremented from 0
+        }
+    }
+
     // --- Original database batch size tests ---
 
     @Test
