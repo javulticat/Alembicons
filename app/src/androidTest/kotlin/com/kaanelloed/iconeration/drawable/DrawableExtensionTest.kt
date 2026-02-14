@@ -135,6 +135,96 @@ class DrawableExtensionTest {
         assertEquals(50, result.height)
     }
 
+    // --- Bitmap caching safety tests (Fix 4) ---
+    // ApplicationItem now caches the result of shrinkIfBiggerThan() with
+    // remember(app.icon) to avoid re-allocating bitmaps on every recomposition.
+    // These tests verify that caching is safe: the function is deterministic
+    // and produces consistent results for the same drawable input.
+
+    @Test
+    fun shrinkIfBiggerThan_producesConsistentDimensionsOnRepeatedCalls() {
+        // Simulates what happens when remember() caches the first call:
+        // subsequent calls with the same drawable must produce identical dimensions
+        val drawable = createDrawableWithSize(2000, 1500)
+        val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE
+
+        val result1 = drawable.shrinkIfBiggerThan(maxSize)
+        val result2 = drawable.shrinkIfBiggerThan(maxSize)
+        val result3 = drawable.shrinkIfBiggerThan(maxSize)
+
+        assertEquals("Width should be consistent across calls", result1.width, result2.width)
+        assertEquals("Width should be consistent across calls", result2.width, result3.width)
+        assertEquals("Height should be consistent across calls", result1.height, result2.height)
+        assertEquals("Height should be consistent across calls", result2.height, result3.height)
+
+        result1.recycle()
+        result2.recycle()
+        result3.recycle()
+    }
+
+    @Test
+    fun shrinkIfBiggerThan_cachedResultIsSafeToReuseForRendering() {
+        // Verifies a cached bitmap (like what remember() holds) can be drawn
+        // repeatedly without issues — simulating LazyColumn recomposition
+        val drawable = createDrawableWithSize(1024, 1024)
+        val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE
+
+        val cached = drawable.shrinkIfBiggerThan(maxSize)
+
+        // Draw the same cached bitmap 10 times (simulating scroll recompositions)
+        val target = Bitmap.createBitmap(maxSize, maxSize, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(target)
+        repeat(10) {
+            canvas.drawBitmap(cached, 0f, 0f, null)
+        }
+
+        assertFalse("Cached bitmap should not be recycled after repeated use", cached.isRecycled)
+
+        target.recycle()
+        cached.recycle()
+    }
+
+    @Test
+    fun shrinkIfBiggerThan_eachCallAllocatesNewBitmap() {
+        // Verifies that without caching, each call creates a new allocation.
+        // This is exactly the problem that remember() solves in ApplicationItem.
+        val drawable = createDrawableWithSize(500, 500)
+        val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE
+
+        val result1 = drawable.shrinkIfBiggerThan(maxSize)
+        val result2 = drawable.shrinkIfBiggerThan(maxSize)
+
+        // They're different Bitmap objects (new allocation each time)
+        assertFalse(
+            "Without caching, each call should produce a distinct Bitmap object",
+            result1 === result2
+        )
+
+        // But with same content dimensions
+        assertEquals(result1.width, result2.width)
+        assertEquals(result1.height, result2.height)
+
+        result1.recycle()
+        result2.recycle()
+    }
+
+    @Test
+    fun shrinkIfBiggerThan_smallDrawableProducesConsistentResults() {
+        // Even drawables under the threshold should behave consistently for caching
+        val drawable = createDrawableWithSize(100, 100)
+        val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE
+
+        val result1 = drawable.shrinkIfBiggerThan(maxSize)
+        val result2 = drawable.shrinkIfBiggerThan(maxSize)
+
+        assertEquals(result1.width, result2.width)
+        assertEquals(result1.height, result2.height)
+        assertEquals("Small drawable should pass through at original size", 100, result1.width)
+
+        result1.recycle()
+        result2.recycle()
+    }
+
     @Test
     fun maxIconListSize_isReasonableForDisplayUse() {
         val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE

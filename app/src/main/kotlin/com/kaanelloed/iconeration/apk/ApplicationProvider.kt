@@ -217,9 +217,21 @@ class ApplicationProvider(private val context: Context) {
         val pack2 = IconPackContainer(secondaryIconPack, secondaryIconPackApps)
 
         val builder = IconGenerator(context, opt, pack1, pack2)
-        builder.generateIcons(applicationList) { application, icon ->
-            editApplication(application, application.changeExport(icon))
+
+        // Build index lookup for O(1) access during batch icon generation
+        val appIndexMap = HashMap<PackageInfoStruct, Int>(applicationList.size)
+        for ((index, app) in applicationList.withIndex()) {
+            appIndexMap[app] = index
         }
+
+        val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
+        builder.generateIcons(applicationList) { application, icon ->
+            val index = appIndexMap[application]
+            if (index != null) {
+                edits.add(Pair(index, application.changeExport(icon)))
+            }
+        }
+        editApplicationsBatch(edits)
     }
 
     fun getIcon(application: PackageInfoStruct, options: GenerationOptions, customIcon: ResourceDrawable? = null): ExportableIcon {
@@ -296,25 +308,36 @@ class ApplicationProvider(private val context: Context) {
         val dbApps = dao.getAll()
         val apps = applicationList.toList() //clone
 
-        for (app in apps) {
-            val dbApp = dbApps.find { it.packageName == app.packageName && it.activityName == app.activityName }
-            if (dbApp != null) {
-                val icon = if (dbApp.isXml) {
-                    val nodes = XmlDecoder.fromBase64(dbApp.drawable)
-                    val vector = VectorParser.parse(context.resources, nodes, defaultColor)
-
-                    if (vector != null) {
-                        VectorIcon(vector)
-                    } else {
-                        EmptyIcon()
-                    }
-                } else {
-                    BitmapIcon(bitmapFromBase64(dbApp.drawable), dbApp.isAdaptiveIcon)
-                }
-
-                editApplication(app, app.changeExport(icon))
-            }
+        // Build a lookup map for O(1) access instead of O(n) find per app
+        val dbAppMap = HashMap<Pair<String, String>, DbApplication>(dbApps.size)
+        for (dbApp in dbApps) {
+            dbAppMap[Pair(dbApp.packageName, dbApp.activityName)] = dbApp
         }
+
+        // Collect all edits and apply as a single batch to avoid
+        // creating a new list copy for each of 500+ apps
+        val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
+
+        for ((index, app) in apps.withIndex()) {
+            val dbApp = dbAppMap[Pair(app.packageName, app.activityName)] ?: continue
+
+            val icon = if (dbApp.isXml) {
+                val nodes = XmlDecoder.fromBase64(dbApp.drawable)
+                val vector = VectorParser.parse(context.resources, nodes, defaultColor)
+
+                if (vector != null) {
+                    VectorIcon(vector)
+                } else {
+                    EmptyIcon()
+                }
+            } else {
+                BitmapIcon(bitmapFromBase64(dbApp.drawable), dbApp.isAdaptiveIcon)
+            }
+
+            edits.add(Pair(index, app.changeExport(icon)))
+        }
+
+        editApplicationsBatch(edits)
 
         db.close()
     }
@@ -393,6 +416,19 @@ class ApplicationProvider(private val context: Context) {
         applicationList = applicationList.toMutableList().also {
             it[index] = newApp
         }
+    }
+
+    /**
+     * Apply multiple edits at once, creating only a single new list.
+     * Each pair maps the index in applicationList to the new PackageInfoStruct.
+     */
+    private fun editApplicationsBatch(edits: List<Pair<Int, PackageInfoStruct>>) {
+        if (edits.isEmpty()) return
+        val mutable = applicationList.toMutableList()
+        for ((index, newApp) in edits) {
+            mutable[index] = newApp
+        }
+        applicationList = mutable.toList()
     }
 
     fun copy(): ApplicationProvider {
