@@ -58,8 +58,6 @@ import com.kaanelloed.iconeration.data.getColorValue
 import com.kaanelloed.iconeration.data.getDefaultBackgroundColor
 import com.kaanelloed.iconeration.data.getPreferencesValue
 import com.kaanelloed.iconeration.data.getStringValue
-import com.kaanelloed.iconeration.drawable.DrawableExtension
-import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.shrinkIfBiggerThan
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.sizeIsGreaterThanZero
 import com.kaanelloed.iconeration.icon.EmptyIcon
 import kotlinx.coroutines.CoroutineScope
@@ -124,12 +122,7 @@ fun ApplicationItem(iconPacks: List<IconPack>, app: PackageInfoStruct, index: In
     Row(modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically) {
         if (app.icon.sizeIsGreaterThanZero()) {
-            // Cache the shrunk bitmap to avoid re-allocating on every recomposition.
-            // The Drawable identity is stable per app, so this is safe to key on.
-            val shrunkBitmap = remember(app.icon) {
-                app.icon.shrinkIfBiggerThan(DrawableExtension.MAX_ICON_LIST_SIZE).asImageBitmap()
-            }
-            Image(painter = BitmapPainter(shrunkBitmap)
+            Image(painter = BitmapPainter(app.listBitmap.asImageBitmap())
                 , contentDescription = null
                 //, contentScale = ContentScale.Inside
                 , modifier = Modifier
