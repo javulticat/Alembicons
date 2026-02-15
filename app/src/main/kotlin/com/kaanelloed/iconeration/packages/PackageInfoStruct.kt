@@ -59,12 +59,18 @@ class PackageInfoStruct(
     }
 
     private fun removeDiacritics(text: String): String {
-        return Normalizer.normalize(text, Normalizer.Form.NFD).replace("\\p{Mn}+".toRegex(), "")
+        return Normalizer.normalize(text, Normalizer.Form.NFD).replace(DIACRITICS_REGEX, "")
     }
 
     override fun hashCode(): Int {
         var result = packageName.hashCode()
         result = 31 * result + activityName.hashCode()
         return result
+    }
+
+    companion object {
+        // Pre-compiled regex to avoid recompiling on every compareTo call
+        // during sorting of 500+ items (O(n log n) calls).
+        private val DIACRITICS_REGEX = "\\p{Mn}+".toRegex()
     }
 }

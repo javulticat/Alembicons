@@ -97,24 +97,35 @@ fun ApplicationList(iconPacks: List<IconPack>, filter: String) {
         }
     }
 
+    // Hoist preference reads above the LazyColumn so they're collected once
+    // instead of each ApplicationItem creating its own DataStore Flow collectors.
+    val prefs = getPreferences()
+    val bgColorValue = prefs.getColorValue(BackgroundColorKey, prefs.getDefaultBackgroundColor())
+    val themed = prefs.getBooleanValue(ExportThemedKey)
+    val dynamicColor = themed && supportDynamicColors()
+
     LazyColumn {
         items(
             count = filteredApps.size,
-            key = { i -> val (_, app) = filteredApps[i]; "${app.packageName}/${app.activityName}" }
+            key = { i -> val (_, app) = filteredApps[i]; "${app.packageName}/${app.activityName}" },
+            contentType = { "app" }
         ) { i ->
             val (originalIndex, app) = filteredApps[i]
-            ApplicationItem(iconPacks, app, originalIndex)
+            ApplicationItem(iconPacks, app, originalIndex, bgColorValue, themed, dynamicColor)
         }
     }
 }
 
 @Composable
-fun ApplicationItem(iconPacks: List<IconPack>, app: PackageInfoStruct, index: Int) {
+fun ApplicationItem(
+    iconPacks: List<IconPack>,
+    app: PackageInfoStruct,
+    index: Int,
+    bgColorValue: Color,
+    themed: Boolean,
+    dynamicColor: Boolean
+) {
     val activity = getCurrentMainActivity()
-    val prefs = getPreferences()
-    val bgColorValue = prefs.getColorValue(BackgroundColorKey, prefs.getDefaultBackgroundColor())
-    val themed = prefs.getBooleanValue(ExportThemedKey)
-    val dynamicColor = themed && supportDynamicColors()
 
     var openAppOptions by rememberSaveable { mutableStateOf(false) }
     var openWarning by rememberSaveable { mutableStateOf(false) }
@@ -122,7 +133,12 @@ fun ApplicationItem(iconPacks: List<IconPack>, app: PackageInfoStruct, index: In
     Row(modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically) {
         if (app.icon.sizeIsGreaterThanZero()) {
-            Image(painter = BitmapPainter(app.listBitmap.asImageBitmap())
+            // Cache the BitmapPainter so asImageBitmap() and BitmapPainter
+            // are not re-allocated on every recomposition.
+            val listPainter = remember(app.listBitmap) {
+                BitmapPainter(app.listBitmap.asImageBitmap())
+            }
+            Image(painter = listPainter
                 , contentDescription = null
                 //, contentScale = ContentScale.Inside
                 , modifier = Modifier
@@ -183,7 +199,7 @@ fun ApplicationItem(iconPacks: List<IconPack>, app: PackageInfoStruct, index: In
             openAppOptions = false
         }
     }
-    
+
     if (openWarning) {
         ShowToast(stringResource(id = R.string.syncText))
         openWarning = false

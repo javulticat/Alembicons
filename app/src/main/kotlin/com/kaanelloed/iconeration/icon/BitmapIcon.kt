@@ -2,6 +2,7 @@ package com.kaanelloed.iconeration.icon
 
 import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
@@ -10,7 +11,7 @@ import com.kaanelloed.iconeration.extension.toBase64
 class BitmapIcon(val bitmap: Bitmap, exportAsAdaptiveIcon: Boolean = false): ExportableIcon(exportAsAdaptiveIcon) {
     @Composable
     override fun getPainter(): Painter {
-        return BitmapPainter(bitmap.asImageBitmap())
+        return remember(bitmap) { BitmapPainter(bitmap.asImageBitmap()) }
     }
 
     override fun toBitmap(): Bitmap {

@@ -40,6 +40,7 @@ import com.kaanelloed.iconeration.data.getDefaultBackgroundColor
 import com.kaanelloed.iconeration.data.getDefaultIconColor
 import com.kaanelloed.iconeration.data.getEnumValue
 import com.kaanelloed.iconeration.data.getStringValue
+import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.sizeIsGreaterThanZero
 import com.kaanelloed.iconeration.drawable.ResourceDrawable
 import com.kaanelloed.iconeration.extension.bitmapFromBase64
 import com.kaanelloed.iconeration.icon.BitmapIcon
@@ -89,7 +90,14 @@ class ApplicationProvider(private val context: Context) {
         val apps = appManager.getAllInstalledApps()
         apps.sort()
 
-        applicationList = apps.toList()
+        val appList = apps.toList()
+
+        // Pre-initialize list bitmaps on this (background) thread so they
+        // don't get lazily initialized on the main thread during scroll,
+        // which causes frame drops and OOM crashes with 500+ apps.
+        preWarmListBitmaps(appList)
+
+        applicationList = appList
     }
 
     @Suppress(SuppressRedundantSuspendModifier)
@@ -231,6 +239,7 @@ class ApplicationProvider(private val context: Context) {
                 edits.add(Pair(index, application.changeExport(icon)))
             }
         }
+        preWarmEditBitmaps(edits)
         editApplicationsBatch(edits)
     }
 
@@ -337,6 +346,7 @@ class ApplicationProvider(private val context: Context) {
             edits.add(Pair(index, app.changeExport(icon)))
         }
 
+        preWarmEditBitmaps(edits)
         editApplicationsBatch(edits)
 
         db.close()
@@ -378,6 +388,30 @@ class ApplicationProvider(private val context: Context) {
         }
 
         db.close()
+    }
+
+    /**
+     * Pre-initialize listBitmap for all apps so the lazy property is resolved
+     * on a background thread rather than on the main thread during scroll.
+     */
+    private fun preWarmListBitmaps(apps: List<PackageInfoStruct>) {
+        for (app in apps) {
+            if (app.icon.sizeIsGreaterThanZero()) {
+                app.listBitmap // trigger lazy init
+            }
+        }
+    }
+
+    /**
+     * Pre-initialize listBitmap for newly created PackageInfoStruct instances
+     * (from changeExport) before they become visible via editApplicationsBatch.
+     */
+    private fun preWarmEditBitmaps(edits: List<Pair<Int, PackageInfoStruct>>) {
+        for ((_, newApp) in edits) {
+            if (newApp.icon.sizeIsGreaterThanZero()) {
+                newApp.listBitmap // trigger lazy init
+            }
+        }
     }
 
     companion object {
