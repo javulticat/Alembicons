@@ -60,7 +60,7 @@ import com.kaanelloed.iconeration.xml.XmlDecoder
 class ApplicationProvider(private val context: Context) {
     var applicationList: List<PackageInfoStruct> by mutableStateOf(listOf())
         private set
-    var iconPacks: List<IconPack> = listOf()
+    var iconPacks: List<IconPack> by mutableStateOf(listOf())
         private set
     var iconPackLoaded: Boolean by mutableStateOf(false)
         private set
