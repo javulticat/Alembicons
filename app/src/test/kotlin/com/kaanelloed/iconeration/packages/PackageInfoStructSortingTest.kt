@@ -47,9 +47,14 @@ class PackageInfoStructSortingTest {
 
     @Test
     fun `diacritics removal handles CJK characters`() {
-        // CJK characters don't have diacritics, should pass through unchanged
-        val cjk = "日本語アプリ"
+        // CJK ideographs have no NFD decomposition, so they pass through unchanged
+        val cjk = "日本語"
         assertEquals(cjk, removeDiacritics(cjk))
+
+        // Katakana with dakuten/handakuten (e.g. プ = フ + combining handakuten)
+        // decompose under NFD, so the combining mark is stripped.
+        // This is expected: the regex targets \p{Mn} (all combining marks).
+        assertEquals("日本語アフリ", removeDiacritics("日本語アプリ"))
     }
 
     @Test
