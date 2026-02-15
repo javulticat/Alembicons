@@ -135,16 +135,16 @@ class DrawableExtensionTest {
         assertEquals(50, result.height)
     }
 
-    // --- Bitmap caching safety tests (Fix 4) ---
-    // ApplicationItem now caches the result of shrinkIfBiggerThan() with
-    // remember(app.icon) to avoid re-allocating bitmaps on every recomposition.
-    // These tests verify that caching is safe: the function is deterministic
-    // and produces consistent results for the same drawable input.
+    // --- Bitmap caching safety tests ---
+    // PackageInfoStruct.listBitmap caches the result of shrinkIfBiggerThan() via
+    // a lazy property, so the bitmap survives LazyColumn composable disposal during
+    // scrolling. These tests verify that caching is safe: the function is
+    // deterministic and produces consistent results for the same drawable input.
 
     @Test
     fun shrinkIfBiggerThan_producesConsistentDimensionsOnRepeatedCalls() {
-        // Simulates what happens when remember() caches the first call:
-        // subsequent calls with the same drawable must produce identical dimensions
+        // Verifies that the lazy-cached listBitmap produces stable dimensions:
+        // the function must be deterministic for the same drawable input
         val drawable = createDrawableWithSize(2000, 1500)
         val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE
 
@@ -164,8 +164,8 @@ class DrawableExtensionTest {
 
     @Test
     fun shrinkIfBiggerThan_cachedResultIsSafeToReuseForRendering() {
-        // Verifies a cached bitmap (like what remember() holds) can be drawn
-        // repeatedly without issues — simulating LazyColumn recomposition
+        // Verifies a cached bitmap (like PackageInfoStruct.listBitmap) can be
+        // drawn repeatedly without issues — simulating LazyColumn scroll cycles
         val drawable = createDrawableWithSize(1024, 1024)
         val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE
 
@@ -187,7 +187,7 @@ class DrawableExtensionTest {
     @Test
     fun shrinkIfBiggerThan_eachCallAllocatesNewBitmap() {
         // Verifies that without caching, each call creates a new allocation.
-        // This is exactly the problem that remember() solves in ApplicationItem.
+        // This is the problem that PackageInfoStruct.listBitmap (lazy) solves.
         val drawable = createDrawableWithSize(500, 500)
         val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE
 

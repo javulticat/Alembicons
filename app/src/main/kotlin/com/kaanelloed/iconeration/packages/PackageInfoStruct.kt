@@ -1,7 +1,10 @@
 package com.kaanelloed.iconeration.packages
 
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import com.kaanelloed.iconeration.data.InstalledApplication
+import com.kaanelloed.iconeration.drawable.DrawableExtension
+import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.shrinkIfBiggerThan
 import com.kaanelloed.iconeration.icon.EmptyIcon
 import com.kaanelloed.iconeration.icon.ExportableIcon
 import java.text.Normalizer
@@ -15,6 +18,15 @@ class PackageInfoStruct(
     val createdIcon: ExportableIcon = EmptyIcon(),
     val internalVersion: Int = 0
 ) : Comparable<PackageInfoStruct> {
+
+    /**
+     * Lazily computed and cached bitmap for display in the app list.
+     * Cached at the data layer so it survives LazyColumn composable disposal
+     * during scrolling, avoiding repeated bitmap allocations and GC pressure.
+     */
+    val listBitmap: Bitmap by lazy {
+        icon.shrinkIfBiggerThan(DrawableExtension.MAX_ICON_LIST_SIZE)
+    }
     override fun equals(other: Any?): Boolean {
         if (other is PackageInfoStruct) {
             return packageName == other.packageName && activityName == other.activityName && other.internalVersion == internalVersion
