@@ -216,6 +216,66 @@ class PackageInfoStructListBitmapTest {
         assertEquals(original.listBitmap.height, edited.listBitmap.height)
     }
 
+    @Test
+    fun listBitmap_afterChangeExport_reusesSameBitmapInstance() {
+        // changeExport() does not change the icon drawable, so it must pass the
+        // already-computed listBitmap to the new instance. Without this, refreshIcons()
+        // on 500+ apps re-allocates every bitmap, causing OOM.
+        val original = createPackageInfoStruct(iconWidth = 512, iconHeight = 512)
+
+        // Trigger lazy init on the original
+        val originalBitmap = original.listBitmap
+
+        // changeExport should carry the bitmap forward
+        val edited = original.changeExport(EmptyIcon())
+
+        assertSame(
+            "changeExport must reuse the original's listBitmap to avoid OOM during bulk refresh",
+            originalBitmap, edited.listBitmap
+        )
+    }
+
+    @Test
+    fun listBitmap_afterMultipleChangeExports_reusesSameBitmapInstance() {
+        // Simulate multiple edits (e.g., refreshIcons followed by loadAlchemiconPack).
+        // The bitmap must be carried through every changeExport call.
+        val original = createPackageInfoStruct(iconWidth = 1024, iconHeight = 1024)
+        val originalBitmap = original.listBitmap
+
+        val edited1 = original.changeExport(EmptyIcon())
+        val edited2 = edited1.changeExport(EmptyIcon())
+        val edited3 = edited2.changeExport(EmptyIcon())
+
+        assertSame("First changeExport must reuse bitmap", originalBitmap, edited1.listBitmap)
+        assertSame("Second changeExport must reuse bitmap", originalBitmap, edited2.listBitmap)
+        assertSame("Third changeExport must reuse bitmap", originalBitmap, edited3.listBitmap)
+    }
+
+    @Test
+    fun listBitmap_bulkChangeExport_noNewAllocations() {
+        // Simulate the refreshIcons pattern: 500 apps all go through changeExport.
+        // Every new instance must share the same bitmap as its original.
+        val apps = (0 until 500).map { i ->
+            createPackageInfoStruct(
+                packageName = "com.example.app$i",
+                activityName = ".Main$i"
+            )
+        }
+
+        // Pre-warm originals (like initializeApplications does)
+        val originalBitmaps = apps.map { it.listBitmap }
+
+        // Bulk changeExport (like refreshIcons does)
+        val editedApps = apps.map { it.changeExport(EmptyIcon()) }
+
+        for (i in apps.indices) {
+            assertSame(
+                "App $i: changeExport must reuse bitmap, not allocate a new one",
+                originalBitmaps[i], editedApps[i].listBitmap
+            )
+        }
+    }
+
     // --- Pre-warming tests ---
     // ApplicationProvider.initializeApplications() now pre-warms listBitmap on a
     // background thread so the lazy init doesn't happen on the main/composition
