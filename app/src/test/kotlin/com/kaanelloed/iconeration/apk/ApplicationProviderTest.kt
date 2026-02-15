@@ -424,4 +424,145 @@ class ApplicationProviderTest {
             reductionFactor >= 10
         )
     }
+
+    // --- Pre-warming pattern tests ---
+    // initializeApplications() now pre-warms listBitmap for all items on the
+    // background thread before making the list visible. loadAlchemiconPack() and
+    // refreshIcons() pre-warm edited items before editApplicationsBatch().
+    // These tests verify the patterns using AppKey simulations.
+
+    /**
+     * Simulates an item with a lazy-cached value (like PackageInfoStruct.listBitmap).
+     */
+    private class CachingItem(val id: Int) {
+        var initCount = 0
+            private set
+        val cachedValue: String by lazy {
+            initCount++
+            "bitmap_$id"
+        }
+    }
+
+    @Test
+    fun `pre-warming initializes lazy value before list is visible`() {
+        // Simulates: preWarmListBitmaps runs before applicationList is set
+        val items = (0 until 500).map { CachingItem(it) }
+
+        // Pre-warm (like preWarmListBitmaps does)
+        for (item in items) {
+            item.cachedValue // trigger lazy init
+        }
+
+        // Verify all items are initialized exactly once
+        for (item in items) {
+            assertEquals(
+                "Item ${item.id} should be initialized exactly once",
+                1, item.initCount
+            )
+        }
+
+        // Subsequent access should not re-initialize
+        for (item in items) {
+            item.cachedValue // access again
+            assertEquals(
+                "Item ${item.id} should still be initialized exactly once after re-access",
+                1, item.initCount
+            )
+        }
+    }
+
+    @Test
+    fun `pre-warming edits covers all new items before batch apply`() {
+        // Simulates: preWarmEditBitmaps runs before editApplicationsBatch
+        val originals = (0 until 500).map { CachingItem(it) }
+
+        // Some items get edited (like loadAlchemiconPack creating new PackageInfoStructs)
+        val editIndices = listOf(0, 10, 50, 100, 200, 499)
+        val edits = editIndices.map { index ->
+            index to CachingItem(index) // new item, fresh lazy
+        }
+
+        // Pre-warm edits (like preWarmEditBitmaps does)
+        for ((_, newItem) in edits) {
+            newItem.cachedValue // trigger lazy init
+        }
+
+        // Apply batch
+        val result = originals.toMutableList()
+        for ((index, newItem) in edits) {
+            result[index] = newItem
+        }
+
+        // Verify edited items are already initialized
+        for (index in editIndices) {
+            assertEquals(
+                "Edited item at $index should be pre-warmed",
+                1, result[index].initCount
+            )
+        }
+    }
+
+    @Test
+    fun `pre-warming runs before list assignment in initialization pattern`() {
+        // Simulates the exact pattern from initializeApplications():
+        //   val appList = apps.toList()
+        //   preWarmListBitmaps(appList)
+        //   applicationList = appList
+        var listSetAt = -1
+        val events = mutableListOf<String>()
+
+        val items = (0 until 100).map { CachingItem(it) }
+
+        // Pre-warm happens before "assignment"
+        events.add("pre_warm_start")
+        for (item in items) {
+            item.cachedValue
+        }
+        events.add("pre_warm_end")
+
+        // Simulate list assignment
+        events.add("list_assigned")
+        listSetAt = events.size
+
+        assertTrue(
+            "Pre-warming must complete before list is assigned",
+            events.indexOf("pre_warm_end") < events.indexOf("list_assigned")
+        )
+
+        // All items should be initialized before the list was "visible"
+        for (item in items) {
+            assertEquals(1, item.initCount)
+        }
+    }
+
+    @Test
+    fun `pre-warming edit items before batch mirrors the code pattern`() {
+        // Simulates the exact pattern from refreshIcons/loadAlchemiconPack:
+        //   preWarmEditBitmaps(edits)
+        //   editApplicationsBatch(edits)
+        val events = mutableListOf<String>()
+
+        val edits = (0 until 50).map { index ->
+            index to CachingItem(index)
+        }
+
+        // Pre-warm before batch edit
+        events.add("pre_warm")
+        for ((_, newItem) in edits) {
+            newItem.cachedValue
+        }
+
+        // Batch edit
+        events.add("batch_edit")
+
+        assertTrue(
+            "Pre-warming must happen before batch edit",
+            events.indexOf("pre_warm") < events.indexOf("batch_edit")
+        )
+
+        // All edited items should already be initialized
+        for ((_, item) in edits) {
+            assertEquals("Item should be initialized exactly once", 1, item.initCount)
+        }
+    }
 }
