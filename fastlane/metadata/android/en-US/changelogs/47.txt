@@ -4,3 +4,5 @@ Fixed
 - Reduce memory usage by caching bitmaps and batching list operations
 - Fix app icon bitmaps being re-created on every scroll, causing jank
 - Fix icon packs dropdown showing only "None"
+- Pre-warm app icon bitmaps in background to prevent frame drops during scroll
+- Cache icon painters and hoist preferences to reduce per-item overhead
