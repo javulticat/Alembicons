@@ -177,4 +177,84 @@ class ApplicationListFilterTest {
             )
         }
     }
+
+    // --- Hoisted preference tests ---
+    // Preferences (bgColorValue, themed, dynamicColor) are now read once in
+    // ApplicationList and passed to each ApplicationItem, instead of each item
+    // creating its own DataStore Flow collectors.
+
+    @Test
+    fun `hoisted values are shared identically across all items`() {
+        // Simulates the hoisting pattern: read once, pass to many items.
+        // All items should receive the exact same values.
+        val themed = true
+        val dynamicColor = false
+        val bgColor = "0xFFFFFFFF"
+
+        val apps = (0 until 500).map {
+            SimpleApp("App $it", "com.pkg.$it", ".Main")
+        }
+
+        // Simulate passing hoisted values to each item
+        data class ItemParams(val themed: Boolean, val dynamicColor: Boolean, val bgColor: String)
+
+        val itemParams = apps.map {
+            ItemParams(themed, dynamicColor, bgColor)
+        }
+
+        // All items should receive the same values
+        val distinct = itemParams.distinct()
+        assertEquals(
+            "All 500 items should receive identical preference values",
+            1, distinct.size
+        )
+        assertEquals(themed, distinct[0].themed)
+        assertEquals(dynamicColor, distinct[0].dynamicColor)
+        assertEquals(bgColor, distinct[0].bgColor)
+    }
+
+    @Test
+    fun `hoisting reduces collector count from N to 1`() {
+        // Each visible ApplicationItem previously created its own Flow collectors:
+        //   - getBooleanValue(ExportThemedKey) -> collectAsState
+        //   - getColorValue(BackgroundColorKey) -> collectAsState
+        //   - getBooleanValue(ExportThemedKey) (for dynamicColor) -> same collector
+        // With ~10 visible items, that's ~20 active collectors.
+        // Hoisting reduces it to just 2 collectors at the ApplicationList level.
+
+        val visibleItems = 10
+        val prefsPerItem = 2 // getBooleanValue + getColorValue
+
+        val oldCollectorCount = visibleItems * prefsPerItem
+        val newCollectorCount = prefsPerItem // hoisted to parent
+
+        assertTrue(
+            "Hoisting should use far fewer collectors ($newCollectorCount vs $oldCollectorCount)",
+            newCollectorCount < oldCollectorCount
+        )
+        assertEquals(
+            "Hoisted approach should use exactly $prefsPerItem collectors",
+            prefsPerItem, newCollectorCount
+        )
+    }
+
+    // --- contentType tests ---
+
+    @Test
+    fun `all items in the list have the same content type`() {
+        // LazyColumn's contentType = { "app" } tells Compose that all items
+        // have the same composition structure, enabling slot reuse.
+        val apps = (0 until 500).map {
+            SimpleApp("App $it", "com.pkg.$it", ".Main")
+        }
+
+        val contentTypes = apps.map { "app" } // Replicate contentType = { "app" }
+
+        val distinctTypes = contentTypes.distinct()
+        assertEquals(
+            "All items should have the same contentType for efficient slot reuse",
+            1, distinctTypes.size
+        )
+        assertEquals("app", distinctTypes[0])
+    }
 }

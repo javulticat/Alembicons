@@ -6,10 +6,13 @@ import android.graphics.drawable.BitmapDrawable
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.kaanelloed.iconeration.drawable.DrawableExtension
+import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.sizeIsGreaterThanZero
 import com.kaanelloed.iconeration.icon.EmptyIcon
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Tests for PackageInfoStruct.listBitmap lazy caching.
@@ -211,5 +214,145 @@ class PackageInfoStructListBitmapTest {
 
         assertEquals(original.listBitmap.width, edited.listBitmap.width)
         assertEquals(original.listBitmap.height, edited.listBitmap.height)
+    }
+
+    // --- Pre-warming tests ---
+    // ApplicationProvider.initializeApplications() now pre-warms listBitmap on a
+    // background thread so the lazy init doesn't happen on the main/composition
+    // thread during scroll. These tests verify that pre-warming behavior.
+
+    @Test
+    fun preWarm_backgroundThreadInitMakesCacheAvailableOnMainThread() {
+        // Simulates the pre-warming pattern: a background thread accesses listBitmap
+        // first, then the main thread should get the same cached instance.
+        val app = createPackageInfoStruct(iconWidth = 512, iconHeight = 512)
+
+        var backgroundBitmap: Bitmap? = null
+        val latch = CountDownLatch(1)
+
+        // Pre-warm on a background thread (like Dispatchers.Default)
+        Thread {
+            backgroundBitmap = app.listBitmap
+            latch.countDown()
+        }.start()
+
+        assertTrue("Background thread should complete", latch.await(5, TimeUnit.SECONDS))
+
+        // Main thread access should return the exact same cached instance
+        val mainThreadBitmap = app.listBitmap
+        assertSame(
+            "Main thread must get the same bitmap that was pre-warmed on the background thread",
+            backgroundBitmap, mainThreadBitmap
+        )
+    }
+
+    @Test
+    fun preWarm_allItemsInListAreReadyAfterBackgroundInit() {
+        // Simulates preWarmListBitmaps: iterate all apps on a background thread,
+        // then verify every item's listBitmap is already resolved.
+        val apps = (0 until 100).map { i ->
+            createPackageInfoStruct(
+                packageName = "com.example.app$i",
+                activityName = ".Main$i"
+            )
+        }
+
+        val preWarmed = arrayOfNulls<Bitmap>(apps.size)
+        val latch = CountDownLatch(1)
+
+        // Pre-warm on background thread
+        Thread {
+            for ((i, app) in apps.withIndex()) {
+                if (app.icon.sizeIsGreaterThanZero()) {
+                    preWarmed[i] = app.listBitmap
+                }
+            }
+            latch.countDown()
+        }.start()
+
+        assertTrue("Pre-warming should complete", latch.await(10, TimeUnit.SECONDS))
+
+        // Verify all items return their pre-warmed instances
+        for ((i, app) in apps.withIndex()) {
+            assertSame(
+                "App $i: listBitmap must return the pre-warmed instance",
+                preWarmed[i], app.listBitmap
+            )
+        }
+    }
+
+    @Test
+    fun preWarm_changeExportItemsCanBePreWarmedBeforeBatchEdit() {
+        // Simulates preWarmEditBitmaps: new PackageInfoStruct instances from
+        // changeExport() are pre-warmed before editApplicationsBatch makes them
+        // visible to the UI.
+        val originals = (0 until 50).map { i ->
+            createPackageInfoStruct(
+                packageName = "com.example.app$i",
+                activityName = ".Main$i"
+            )
+        }
+
+        // Create edited versions (like loadAlchemiconPack does)
+        val edits = originals.mapIndexed { index, app ->
+            index to app.changeExport(EmptyIcon())
+        }
+
+        val preWarmed = mutableMapOf<Int, Bitmap>()
+        val latch = CountDownLatch(1)
+
+        // Pre-warm the new items on background thread
+        Thread {
+            for ((index, newApp) in edits) {
+                if (newApp.icon.sizeIsGreaterThanZero()) {
+                    preWarmed[index] = newApp.listBitmap
+                }
+            }
+            latch.countDown()
+        }.start()
+
+        assertTrue("Pre-warming edits should complete", latch.await(10, TimeUnit.SECONDS))
+
+        // After "editApplicationsBatch", the new items' bitmaps are already cached
+        for ((index, newApp) in edits) {
+            assertSame(
+                "Edited app $index: listBitmap must be pre-warmed",
+                preWarmed[index], newApp.listBitmap
+            )
+            assertFalse(
+                "Edited app $index: pre-warmed bitmap must be valid",
+                newApp.listBitmap.isRecycled
+            )
+        }
+    }
+
+    @Test
+    fun preWarm_concurrentAccessDuringWarmUpIsSafe() {
+        // Verify thread safety: if the main thread accesses listBitmap while the
+        // background thread is pre-warming the same item, both get the same result.
+        val app = createPackageInfoStruct(iconWidth = 1024, iconHeight = 1024)
+
+        var bgResult: Bitmap? = null
+        var mainResult: Bitmap? = null
+        val bgStarted = CountDownLatch(1)
+        val latch = CountDownLatch(1)
+
+        // Background thread accesses listBitmap
+        Thread {
+            bgStarted.countDown()
+            bgResult = app.listBitmap
+            latch.countDown()
+        }.start()
+
+        // Main thread also accesses listBitmap concurrently
+        bgStarted.await(1, TimeUnit.SECONDS)
+        mainResult = app.listBitmap
+
+        assertTrue("Background thread should complete", latch.await(5, TimeUnit.SECONDS))
+
+        assertSame(
+            "Concurrent access must return the same instance (lazy is thread-safe)",
+            bgResult, mainResult
+        )
     }
 }
