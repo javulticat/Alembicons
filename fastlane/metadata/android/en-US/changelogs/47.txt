@@ -6,3 +6,4 @@ Fixed
 - Fix icon packs dropdown showing only "None"
 - Pre-warm app icon bitmaps in background to prevent frame drops during scroll
 - Cache icon painters and hoist preferences to reduce per-item overhead
+- Fix crash when refreshing icons with many installed apps

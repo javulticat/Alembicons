@@ -16,16 +16,21 @@ class PackageInfoStruct(
     val icon: Drawable,
     val iconID: Int,
     val createdIcon: ExportableIcon = EmptyIcon(),
-    val internalVersion: Int = 0
+    val internalVersion: Int = 0,
+    private val cachedListBitmap: Bitmap? = null
 ) : Comparable<PackageInfoStruct> {
 
     /**
      * Lazily computed and cached bitmap for display in the app list.
      * Cached at the data layer so it survives LazyColumn composable disposal
      * during scrolling, avoiding repeated bitmap allocations and GC pressure.
+     *
+     * When created via [changeExport], the already-computed bitmap is passed
+     * through [cachedListBitmap] to avoid re-allocating 500+ bitmaps during
+     * bulk refresh operations.
      */
     val listBitmap: Bitmap by lazy {
-        icon.shrinkIfBiggerThan(DrawableExtension.MAX_ICON_LIST_SIZE)
+        cachedListBitmap ?: icon.shrinkIfBiggerThan(DrawableExtension.MAX_ICON_LIST_SIZE)
     }
     override fun equals(other: Any?): Boolean {
         if (other is PackageInfoStruct) {
@@ -43,7 +48,7 @@ class PackageInfoStruct(
     fun changeExport(
         createdIcon: ExportableIcon
     ): PackageInfoStruct {
-        return PackageInfoStruct(appName, packageName, activityName, icon, iconID, createdIcon, internalVersion + 1)
+        return PackageInfoStruct(appName, packageName, activityName, icon, iconID, createdIcon, internalVersion + 1, listBitmap)
     }
 
     fun getFileName(): String {
