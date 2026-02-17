@@ -43,6 +43,8 @@ import com.kaanelloed.iconeration.data.getStringValue
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.sizeIsGreaterThanZero
 import com.kaanelloed.iconeration.drawable.ResourceDrawable
 import com.kaanelloed.iconeration.extension.bitmapFromBase64
+import com.kaanelloed.iconeration.extension.forEachBatch
+import com.kaanelloed.iconeration.extension.forEachBatchIndexed
 import com.kaanelloed.iconeration.icon.BitmapIcon
 import com.kaanelloed.iconeration.icon.EmptyIcon
 import com.kaanelloed.iconeration.icon.ExportableIcon
@@ -230,11 +232,7 @@ class ApplicationProvider(private val context: Context) {
         // Without batching, generating icons for 500+ apps in a tight loop
         // accumulates hundreds of intermediate bitmaps and ExportableIcon
         // objects simultaneously, causing OOM crashes.
-        val apps = applicationList
-        for (batchStart in apps.indices step REFRESH_BATCH_SIZE) {
-            val batchEnd = minOf(batchStart + REFRESH_BATCH_SIZE, apps.size)
-            val batch = apps.subList(batchStart, batchEnd)
-
+        applicationList.forEachBatchIndexed(REFRESH_BATCH_SIZE) { batchStart, batch ->
             val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
             val batchIndexMap = HashMap<PackageInfoStruct, Int>(batch.size)
             for (i in batch.indices) {
@@ -249,9 +247,6 @@ class ApplicationProvider(private val context: Context) {
             }
             preWarmEditBitmaps(edits)
             editApplicationsBatch(edits)
-
-            // Hint GC to reclaim intermediate bitmaps before the next batch
-            System.gc()
         }
     }
 
@@ -375,12 +370,11 @@ class ApplicationProvider(private val context: Context) {
         // Delete all existing entries first
         packDao.deleteAllApplications()
 
-        // Process apps in batches to avoid OOM with many installed apps
-        // Converting icons to Base64 strings is memory-intensive
-        val batchSize = DB_SAVE_BATCH_SIZE
+        // Process apps in batches to avoid OOM with many installed apps.
+        // Converting icons to Base64 strings is memory-intensive.
         val appsWithIcons = applicationList.filter { it.createdIcon !is EmptyIcon }
 
-        for (batch in appsWithIcons.chunked(batchSize)) {
+        appsWithIcons.forEachBatch(DB_SAVE_BATCH_SIZE) { batch ->
             val dbApps = batch.map { app ->
                 val isXml = app.createdIcon is VectorIcon
                 DbApplication(
@@ -392,11 +386,7 @@ class ApplicationProvider(private val context: Context) {
                 )
             }
 
-            // Insert this batch
             packDao.insertAll(dbApps)
-
-            // Hint GC to free memory from Base64 string conversions
-            System.gc()
         }
 
         db.close()

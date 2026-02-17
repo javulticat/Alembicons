@@ -330,6 +330,91 @@ class ApplicationProviderTest {
         }
     }
 
+    // --- Refresh batch size tests ---
+
+    @Test
+    fun `refresh batch size constant is positive and reasonable`() {
+        assertTrue("Refresh batch size should be positive", ApplicationProvider.REFRESH_BATCH_SIZE > 0)
+
+        // Each generated icon can hold a bitmap up to 500x500 (1MB).
+        // 50 icons = ~50MB peak per batch, which is reasonable for most devices.
+        assertTrue("Refresh batch size should be <= 100 for memory safety", ApplicationProvider.REFRESH_BATCH_SIZE <= 100)
+        assertTrue("Refresh batch size should be >= 10 for efficiency", ApplicationProvider.REFRESH_BATCH_SIZE >= 10)
+    }
+
+    @Test
+    fun `refresh batch size is larger or equal to database batch size`() {
+        // Icon generation is less memory-intensive per-item than Base64 conversion,
+        // so refresh can use a larger batch size
+        assertTrue(
+            "Refresh batch size should be >= DB batch size",
+            ApplicationProvider.REFRESH_BATCH_SIZE >= ApplicationProvider.DB_SAVE_BATCH_SIZE
+        )
+    }
+
+    @Test
+    fun `batched refresh processes all items with correct indices`() {
+        // Simulate the exact refreshIcons batch pattern using forEachBatchIndexed
+        val apps = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
+        val allEdits = mutableListOf<Pair<Int, AppKey>>()
+
+        val batchSize = ApplicationProvider.REFRESH_BATCH_SIZE
+        // Simulate: apps.forEachBatchIndexed(batchSize) { batchStart, batch -> ... }
+        for (batchStart in apps.indices step batchSize) {
+            val batchEnd = minOf(batchStart + batchSize, apps.size)
+            val batch = apps.subList(batchStart, batchEnd)
+
+            val batchIndexMap = HashMap<AppKey, Int>(batch.size)
+            for (i in batch.indices) {
+                batchIndexMap[batch[i]] = batchStart + i
+            }
+
+            for (app in batch) {
+                val index = batchIndexMap[app]
+                if (index != null) {
+                    allEdits.add(Pair(index, app.changeExport()))
+                }
+            }
+        }
+
+        assertEquals("All 500 apps should produce edits", 500, allEdits.size)
+
+        // Verify indices are sequential and correct
+        for ((idx, edit) in allEdits.withIndex()) {
+            assertEquals("Edit $idx should have correct absolute index", idx, edit.first)
+            assertEquals("Edit $idx should have correct package name", "com.pkg.$idx", edit.second.packageName)
+        }
+    }
+
+    @Test
+    fun `batched refresh with batch size 50 creates correct batch count`() {
+        val appCount = 500
+        val batchSize = ApplicationProvider.REFRESH_BATCH_SIZE
+        var batchCount = 0
+
+        for (batchStart in (0 until appCount) step batchSize) {
+            batchCount++
+        }
+
+        val expectedBatches = (appCount + batchSize - 1) / batchSize
+        assertEquals("500 apps should produce $expectedBatches batches", expectedBatches, batchCount)
+    }
+
+    @Test
+    fun `batched refresh memory estimation per batch is reasonable`() {
+        // Each generated icon bitmap can be up to MAX_ICON_PROCESS_SIZE (500px)
+        // 500x500 ARGB_8888 = 1MB per icon
+        val maxBitmapSizeMB = 1.0
+        val batchSize = ApplicationProvider.REFRESH_BATCH_SIZE
+
+        val estimatedBatchMemoryMB = batchSize * maxBitmapSizeMB
+
+        assertTrue(
+            "Estimated batch memory ($estimatedBatchMemoryMB MB) should be < 100MB",
+            estimatedBatchMemoryMB < 100.0
+        )
+    }
+
     // --- Original database batch size tests ---
 
     @Test
