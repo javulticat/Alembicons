@@ -1,6 +1,7 @@
 package com.kaanelloed.iconeration.icon.creator
 
 import android.content.Context
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -58,6 +59,11 @@ class IconGenerator(
     private val primaryIconPackApplications: IconPackContainer,
     private val secondaryIconPackApplications: IconPackContainer
 ) {
+    private val appManager = ApplicationManager(ctx)
+
+    // Cache Resources lookups to avoid repeated IPC via getResourcesForApplication()
+    // when processing 500+ apps that all reference the same icon pack.
+    private val resourcesCache = HashMap<String, Resources?>()
     fun generateIcon(application: PackageInfoStruct,
                      onUpdate: (application: PackageInfoStruct, icon: ExportableIcon) -> Unit) {
         generateIcons(listOf(application), onUpdate)
@@ -209,11 +215,15 @@ class IconGenerator(
         return VectorIcon(newIcon)
     }
 
-    private fun parseApplicationIcon(application: PackageInfoStruct): BaseIcon {
-        val appMan = ApplicationManager(ctx)
+    private fun getCachedResources(packageName: String): Resources? {
+        return resourcesCache.getOrPut(packageName) {
+            appManager.getResources(packageName)
+        }
+    }
 
+    private fun parseApplicationIcon(application: PackageInfoStruct): BaseIcon {
         if (isVectorDrawable(application.icon) && options.vector) {
-            val res = appMan.getResources(application.packageName) ?: return EmptyIcon()
+            val res = getCachedResources(application.packageName) ?: return EmptyIcon()
             return IconParser.parseDrawable(res, application.icon, application.iconID)
         }
 
@@ -397,8 +407,8 @@ class IconGenerator(
     private fun exportIconPackXML(iconPackName: String, iconDrawable: ResourceDrawable): ExportableIcon? {
         if (!isVectorDrawable(iconDrawable.drawable)) return null
 
-        val res = ApplicationManager(ctx).getResources(iconPackName) ?: return null
-        val parser = ApplicationManager(ctx).getPackageResourceXml(iconPackName, iconDrawable.resourceId) ?: return null
+        val res = getCachedResources(iconPackName) ?: return null
+        val parser = appManager.getPackageResourceXml(iconPackName, iconDrawable.resourceId) ?: return null
 
         val adaptiveIcon = AdaptiveIconParser.parse(res, parser.toXmlNode()) ?: return null
         var vectorIcon: VectorIcon? = null

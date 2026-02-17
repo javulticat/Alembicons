@@ -226,21 +226,33 @@ class ApplicationProvider(private val context: Context) {
 
         val builder = IconGenerator(context, opt, pack1, pack2)
 
-        // Build index lookup for O(1) access during batch icon generation
-        val appIndexMap = HashMap<PackageInfoStruct, Int>(applicationList.size)
-        for ((index, app) in applicationList.withIndex()) {
-            appIndexMap[app] = index
-        }
+        // Process apps in batches to limit peak memory usage.
+        // Without batching, generating icons for 500+ apps in a tight loop
+        // accumulates hundreds of intermediate bitmaps and ExportableIcon
+        // objects simultaneously, causing OOM crashes.
+        val apps = applicationList
+        for (batchStart in apps.indices step REFRESH_BATCH_SIZE) {
+            val batchEnd = minOf(batchStart + REFRESH_BATCH_SIZE, apps.size)
+            val batch = apps.subList(batchStart, batchEnd)
 
-        val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
-        builder.generateIcons(applicationList) { application, icon ->
-            val index = appIndexMap[application]
-            if (index != null) {
-                edits.add(Pair(index, application.changeExport(icon)))
+            val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
+            val batchIndexMap = HashMap<PackageInfoStruct, Int>(batch.size)
+            for (i in batch.indices) {
+                batchIndexMap[batch[i]] = batchStart + i
             }
+
+            builder.generateIcons(batch) { application, icon ->
+                val index = batchIndexMap[application]
+                if (index != null) {
+                    edits.add(Pair(index, application.changeExport(icon)))
+                }
+            }
+            preWarmEditBitmaps(edits)
+            editApplicationsBatch(edits)
+
+            // Hint GC to reclaim intermediate bitmaps before the next batch
+            System.gc()
         }
-        preWarmEditBitmaps(edits)
-        editApplicationsBatch(edits)
     }
 
     fun getIcon(application: PackageInfoStruct, options: GenerationOptions, customIcon: ResourceDrawable? = null): ExportableIcon {
@@ -418,6 +430,11 @@ class ApplicationProvider(private val context: Context) {
         // Batch size for saving icons to database to avoid OOM
         // Each icon's Base64 string can be 50-100KB
         const val DB_SAVE_BATCH_SIZE = 25
+
+        // Batch size for refreshing icons to avoid OOM
+        // Each generated icon can hold a bitmap up to 500x500 (1MB),
+        // so 50 icons = ~50MB peak per batch
+        const val REFRESH_BATCH_SIZE = 50
     }
 
     private fun getAppFilterElements() {
