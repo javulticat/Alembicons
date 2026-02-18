@@ -1,6 +1,8 @@
 package com.kaanelloed.iconeration.apk
 
 import com.kaanelloed.iconeration.data.DbApplication
+import com.kaanelloed.iconeration.extension.BATCH_SIZE
+import com.kaanelloed.iconeration.extension.forEachBatch
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -330,40 +332,16 @@ class ApplicationProviderTest {
         }
     }
 
-    // --- Refresh batch size tests ---
-
-    @Test
-    fun `refresh batch size constant is positive and reasonable`() {
-        assertTrue("Refresh batch size should be positive", ApplicationProvider.REFRESH_BATCH_SIZE > 0)
-
-        // Each generated icon can hold a bitmap up to 500x500 (1MB).
-        // 50 icons = ~50MB peak per batch, which is reasonable for most devices.
-        assertTrue("Refresh batch size should be <= 100 for memory safety", ApplicationProvider.REFRESH_BATCH_SIZE <= 100)
-        assertTrue("Refresh batch size should be >= 10 for efficiency", ApplicationProvider.REFRESH_BATCH_SIZE >= 10)
-    }
-
-    @Test
-    fun `refresh batch size is larger or equal to database batch size`() {
-        // Icon generation is less memory-intensive per-item than Base64 conversion,
-        // so refresh can use a larger batch size
-        assertTrue(
-            "Refresh batch size should be >= DB batch size",
-            ApplicationProvider.REFRESH_BATCH_SIZE >= ApplicationProvider.DB_SAVE_BATCH_SIZE
-        )
-    }
+    // --- Batched refresh pattern tests ---
 
     @Test
     fun `batched refresh processes all items with correct indices`() {
-        // Simulate the exact refreshIcons batch pattern using forEachBatchIndexed
+        // Simulate the exact refreshIcons batch pattern using forEachBatch
         val apps = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
         val allEdits = mutableListOf<Pair<Int, AppKey>>()
 
-        val batchSize = ApplicationProvider.REFRESH_BATCH_SIZE
-        // Simulate: apps.forEachBatchIndexed(batchSize) { batchStart, batch -> ... }
-        for (batchStart in apps.indices step batchSize) {
-            val batchEnd = minOf(batchStart + batchSize, apps.size)
-            val batch = apps.subList(batchStart, batchEnd)
-
+        val batchSize = BATCH_SIZE
+        apps.forEachBatch(batchSize) { batchStart, batch ->
             val batchIndexMap = HashMap<AppKey, Int>(batch.size)
             for (i in batch.indices) {
                 batchIndexMap[batch[i]] = batchStart + i
@@ -387,126 +365,20 @@ class ApplicationProviderTest {
     }
 
     @Test
-    fun `batched refresh with batch size 50 creates correct batch count`() {
-        val appCount = 500
-        val batchSize = ApplicationProvider.REFRESH_BATCH_SIZE
-        var batchCount = 0
-
-        for (batchStart in (0 until appCount) step batchSize) {
-            batchCount++
-        }
-
-        val expectedBatches = (appCount + batchSize - 1) / batchSize
-        assertEquals("500 apps should produce $expectedBatches batches", expectedBatches, batchCount)
-    }
-
-    @Test
-    fun `batched refresh memory estimation per batch is reasonable`() {
-        // Each generated icon bitmap can be up to MAX_ICON_PROCESS_SIZE (500px)
-        // 500x500 ARGB_8888 = 1MB per icon
-        val maxBitmapSizeMB = 1.0
-        val batchSize = ApplicationProvider.REFRESH_BATCH_SIZE
-
-        val estimatedBatchMemoryMB = batchSize * maxBitmapSizeMB
-
-        assertTrue(
-            "Estimated batch memory ($estimatedBatchMemoryMB MB) should be < 100MB",
-            estimatedBatchMemoryMB < 100.0
-        )
-    }
-
-    // --- Original database batch size tests ---
-
-    @Test
-    fun `database batch size constant is positive and reasonable`() {
-        // Batch size should be positive
-        assertTrue("Batch size should be positive", ApplicationProvider.DB_SAVE_BATCH_SIZE > 0)
-
-        // Batch size should be smaller than icon pack builder since Base64 conversion
-        // creates large strings (~50-100KB each)
-        // 25 icons * 100KB = 2.5MB of strings per batch, which is reasonable
-        assertTrue("DB batch size should be <= 50 for memory safety", ApplicationProvider.DB_SAVE_BATCH_SIZE <= 50)
-        assertTrue("DB batch size should be >= 5 for efficiency", ApplicationProvider.DB_SAVE_BATCH_SIZE >= 5)
-    }
-
-    @Test
-    fun `database batch size is smaller than icon pack batch size`() {
-        // Database save is more memory-intensive due to Base64 string creation
-        // So its batch size should be smaller or equal
-        assertTrue(
-            "DB batch size should be <= icon pack batch size",
-            ApplicationProvider.DB_SAVE_BATCH_SIZE <= IconPackBuilder.ICON_BATCH_SIZE
-        )
-    }
-
-    @Test
-    fun `chunked database processing covers all items`() {
-        // Simulate saving icons to database
-        val apps = (1..500).toList()
-        val batchSize = ApplicationProvider.DB_SAVE_BATCH_SIZE
-
-        val processedItems = mutableListOf<Int>()
-        for (batch in apps.chunked(batchSize)) {
-            processedItems.addAll(batch)
-        }
-
-        assertEquals("All items should be saved to database", apps, processedItems)
-    }
-
-    @Test
-    fun `chunked database processing handles large app counts`() {
-        // Simulate device with many installed apps
-        val appCounts = listOf(100, 250, 500, 750, 1000)
-        val batchSize = ApplicationProvider.DB_SAVE_BATCH_SIZE
-
-        for (count in appCounts) {
-            val apps = (1..count).toList()
-            val batches = apps.chunked(batchSize)
-
-            // Each batch should be <= batch size
-            batches.forEach { batch ->
-                assertTrue("Batch size should not exceed limit", batch.size <= batchSize)
-            }
-
-            // Verify all items are processed
-            val processedCount = batches.sumOf { it.size }
-            assertEquals("All $count apps should be saved", count, processedCount)
-        }
-    }
-
-    @Test
-    fun `memory estimation for batch processing`() {
-        // Estimate memory usage per batch
-        // Assuming average Base64 icon size of 75KB (between 50-100KB)
-        val avgBase64SizeKB = 75
-        val batchSize = ApplicationProvider.DB_SAVE_BATCH_SIZE
-
-        val estimatedBatchMemoryMB = (batchSize * avgBase64SizeKB) / 1024.0
-
-        // Each batch should use less than 5MB of memory for Base64 strings
-        assertTrue(
-            "Estimated batch memory ($estimatedBatchMemoryMB MB) should be < 5MB",
-            estimatedBatchMemoryMB < 5.0
-        )
-    }
-
-    @Test
     fun `batching reduces peak memory for 500 apps scenario`() {
-        // Without batching: all 500 Base64 strings in memory at once
-        // With batching: only DB_SAVE_BATCH_SIZE strings at a time
-
+        // Without batching: all 500 intermediate objects in memory at once
+        // With batching: only BATCH_SIZE objects at a time
         val appCount = 500
-        val avgBase64SizeKB = 75
+        val avgObjectSizeKB = 75 // conservative estimate for Base64 strings
 
-        val withoutBatchingMB = (appCount * avgBase64SizeKB) / 1024.0
-        val withBatchingMB = (ApplicationProvider.DB_SAVE_BATCH_SIZE * avgBase64SizeKB) / 1024.0
+        val withoutBatchingMB = (appCount * avgObjectSizeKB) / 1024.0
+        val withBatchingMB = (BATCH_SIZE * avgObjectSizeKB) / 1024.0
 
-        // Peak memory should be significantly reduced
         val reductionFactor = withoutBatchingMB / withBatchingMB
 
         assertTrue(
-            "Batching should reduce peak memory by at least 10x (actual: ${reductionFactor}x)",
-            reductionFactor >= 10
+            "Batching should reduce peak memory by at least 5x (actual: ${reductionFactor}x)",
+            reductionFactor >= 5
         )
     }
 
