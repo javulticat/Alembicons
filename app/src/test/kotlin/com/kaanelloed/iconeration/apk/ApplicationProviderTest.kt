@@ -335,6 +335,57 @@ class ApplicationProviderTest {
     // --- Batched refresh pattern tests ---
 
     @Test
+    fun `refreshIcons accumulates all edits and applies single state update`() {
+        // Verifies the consolidated pattern introduced to fix stutter/crash:
+        // edits are collected from ALL batches into allEdits, then applied
+        // via a SINGLE editApplicationsBatch call after the loop.
+        //
+        // The old (buggy) pattern called editApplicationsBatch INSIDE the loop:
+        //   forEachBatch { batch -> ... editApplicationsBatch(batchEdits) }  // N calls
+        //
+        // This new pattern calls it ONCE after the loop:
+        //   forEachBatch { batch -> ... allEdits.addAll(batchEdits) }
+        //   editApplicationsBatch(allEdits)                                  // 1 call
+        //
+        // Each editApplicationsBatch call writes to mutableStateOf, triggering a
+        // Compose recomposition that re-renders all visible LazyColumn items.
+        // For 500 apps / 50 batch size = 10 batches: old = 10 recompositions,
+        // new = 1 recomposition. This eliminates 9 redundant full-list re-renders.
+
+        val apps = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
+        val allEdits = mutableListOf<Pair<Int, AppKey>>()
+        var stateUpdateCount = 0
+
+        // Phase 1: collect edits across all batches (no state update)
+        apps.forEachBatch(BATCH_SIZE) { batchStart, batch ->
+            val batchIndexMap = HashMap<AppKey, Int>(batch.size)
+            for (i in batch.indices) {
+                batchIndexMap[batch[i]] = batchStart + i
+            }
+            for (app in batch) {
+                val index = batchIndexMap[app]
+                if (index != null) {
+                    allEdits.add(Pair(index, app.changeExport()))
+                }
+            }
+            // No state update inside the loop
+        }
+
+        // Phase 2: single state update after all batches
+        stateUpdateCount++
+        val result = apps.toMutableList()
+        for ((index, newApp) in allEdits) {
+            result[index] = newApp
+        }
+
+        assertEquals("Should trigger exactly one state update for all 500 apps", 1, stateUpdateCount)
+        assertEquals("All 500 apps should have edits", 500, allEdits.size)
+        for ((index, app) in result.withIndex()) {
+            assertEquals("App at $index should have incremented version", 1, app.internalVersion)
+        }
+    }
+
+    @Test
     fun `batched refresh processes all items with correct indices`() {
         // Simulate the exact refreshIcons batch pattern using forEachBatch
         val apps = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
@@ -383,9 +434,13 @@ class ApplicationProviderTest {
     }
 
     // --- Pre-warming pattern tests ---
-    // initializeApplications() now pre-warms listBitmap for all items on the
-    // background thread before making the list visible. loadAlchemiconPack() and
-    // refreshIcons() pre-warm edited items before editApplicationsBatch().
+    // initializeApplications() pre-warms listBitmap for all items on the background
+    // thread before making the list visible (needed because these objects have
+    // cachedListBitmap = null so the lazy property must compute the bitmap).
+    // loadAlchemiconPack() also pre-warms edited items before editApplicationsBatch().
+    // refreshIcons() does NOT need to pre-warm: changeExport() passes the original
+    // object's listBitmap through cachedListBitmap, so the lazy property on each
+    // new PackageInfoStruct is already satisfied and pre-warming would be a no-op.
     // These tests verify the patterns using AppKey simulations.
 
     /**
@@ -493,10 +548,13 @@ class ApplicationProviderTest {
     }
 
     @Test
-    fun `pre-warming edit items before batch mirrors the code pattern`() {
-        // Simulates the exact pattern from refreshIcons/loadAlchemiconPack:
+    fun `pre-warming edit items before batch mirrors the loadAlchemiconPack pattern`() {
+        // Simulates the exact pattern from loadAlchemiconPack:
         //   preWarmEditBitmaps(edits)
         //   editApplicationsBatch(edits)
+        // Note: refreshIcons() no longer uses this pattern because it accumulates
+        // all edits across batches and applies them in a single editApplicationsBatch
+        // call after the loop, reducing Compose recompositions from N_batches to 1.
         val events = mutableListOf<String>()
 
         val edits = (0 until 50).map { index ->

@@ -227,12 +227,22 @@ class ApplicationProvider(private val context: Context) {
 
         val builder = IconGenerator(context, opt, pack1, pack2)
 
-        // Process apps in batches to limit peak memory usage.
-        // Without batching, generating icons for 500+ apps in a tight loop
-        // accumulates hundreds of intermediate bitmaps and ExportableIcon
-        // objects simultaneously, causing OOM crashes.
+        // Accumulate all edits across batches and apply them in a single
+        // editApplicationsBatch call after the loop.  Calling editApplicationsBatch
+        // inside the loop (once per batch of 50) wrote to the mutableStateOf list
+        // on every iteration, triggering 10 separate Compose recompositions for
+        // 500 apps — each recomposition caused the LazyColumn to re-render all
+        // visible items and copied the full list twice.  A single call at the end
+        // reduces this to one recomposition and two list copies regardless of app count.
+        //
+        // Memory is still bounded by the batching: generateIcons is called with
+        // at most BATCH_SIZE apps at a time, limiting the number of intermediate
+        // ExportableIcon objects in flight.  The accumulated PackageInfoStruct
+        // objects in allEdits share their listBitmap with the original objects via
+        // cachedListBitmap (passed through changeExport), so no extra bitmaps are
+        // allocated during accumulation.
+        val allEdits = mutableListOf<Pair<Int, PackageInfoStruct>>()
         applicationList.forEachBatch { batchStart, batch ->
-            val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
             val batchIndexMap = HashMap<PackageInfoStruct, Int>(batch.size)
             for (i in batch.indices) {
                 batchIndexMap[batch[i]] = batchStart + i
@@ -241,12 +251,11 @@ class ApplicationProvider(private val context: Context) {
             builder.generateIcons(batch) { application, icon ->
                 val index = batchIndexMap[application]
                 if (index != null) {
-                    edits.add(Pair(index, application.changeExport(icon)))
+                    allEdits.add(Pair(index, application.changeExport(icon)))
                 }
             }
-            preWarmEditBitmaps(edits)
-            editApplicationsBatch(edits)
         }
+        editApplicationsBatch(allEdits)
     }
 
     fun getIcon(application: PackageInfoStruct, options: GenerationOptions, customIcon: ResourceDrawable? = null): ExportableIcon {
