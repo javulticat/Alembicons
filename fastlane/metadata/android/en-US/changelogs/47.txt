@@ -9,3 +9,5 @@ Fixed
 - Fix crash when refreshing icons with many installed apps
 - Batch icon generation during refresh to prevent out-of-memory crashes
 - Cache icon pack resources to avoid redundant loading during refresh
+- Fix icon refresh causing repeated UI redraws, making the app stutter and freeze
+- Fix redundant system calls during icon pack refresh

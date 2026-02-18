@@ -39,6 +39,7 @@ import com.kaanelloed.iconeration.icon.parser.IconParser
 import com.kaanelloed.iconeration.icon.InsetIcon
 import com.kaanelloed.iconeration.icon.VectorIcon
 import com.kaanelloed.iconeration.packages.ApplicationManager
+import com.kaanelloed.iconeration.packages.ApplicationManager.Companion.getXmlOrNull
 import com.kaanelloed.iconeration.packages.PackageInfoStruct
 import com.kaanelloed.iconeration.packages.PackageVersion
 import com.kaanelloed.iconeration.vector.MutableImageVector.Companion.toMutableImageVector
@@ -402,7 +403,11 @@ class IconGenerator(
         if (!isVectorDrawable(iconDrawable.drawable)) return null
 
         val res = resourcesCache.get(iconPackName) ?: return null
-        val parser = appManager.getPackageResourceXml(iconPackName, iconDrawable.resourceId) ?: return null
+        // Use the already-cached Resources object to obtain the XML parser.
+        // Previously this called appManager.getPackageResourceXml(iconPackName, ...)
+        // which internally called pm.getResourcesForApplication() again — a second
+        // IPC call to the system server for the same package, bypassing the cache.
+        val parser = res.getXmlOrNull(iconDrawable.resourceId) ?: return null
 
         val adaptiveIcon = AdaptiveIconParser.parse(res, parser.toXmlNode()) ?: return null
         var vectorIcon: VectorIcon? = null
