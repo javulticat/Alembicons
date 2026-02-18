@@ -7,3 +7,5 @@ Fixed
 - Pre-warm app icon bitmaps in background to prevent frame drops during scroll
 - Cache icon painters and hoist preferences to reduce per-item overhead
 - Fix crash when refreshing icons with many installed apps
+- Batch icon generation during refresh to prevent out-of-memory crashes
+- Cache icon pack resources to avoid redundant loading during refresh

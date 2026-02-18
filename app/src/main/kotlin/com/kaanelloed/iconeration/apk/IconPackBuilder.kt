@@ -19,6 +19,7 @@ import com.kaanelloed.iconeration.constants.SuppressDeprecation
 import com.kaanelloed.iconeration.constants.SuppressSameParameterValue
 import com.kaanelloed.iconeration.data.InstalledApplication
 import com.kaanelloed.iconeration.extension.getBytes
+import com.kaanelloed.iconeration.extension.forEachBatch
 import com.kaanelloed.iconeration.icon.BitmapIcon
 import com.kaanelloed.iconeration.icon.EmptyIcon
 import com.kaanelloed.iconeration.icon.VectorIcon
@@ -63,11 +64,6 @@ class IconPackBuilder(
     private val newInternalVersionCode = 0
     private val frameworkVersion = 34
     private val minSdkVersion = 21
-
-    companion object {
-        // Batch size for processing icons to avoid OOM with many installed apps
-        const val ICON_BATCH_SIZE = 50
-    }
 
     fun canBeInstalled(): Boolean {
         val installedVersion = getInstalledVersion()
@@ -130,10 +126,9 @@ class IconPackBuilder(
         val vectorBrush = ReferenceBrush("@color/icon_color")
 
         // Process apps in batches to avoid OOM with many installed apps
-        val batchSize = ICON_BATCH_SIZE
         val appsWithIcons = apps.filter { it.createdIcon !is EmptyIcon }
 
-        for ((batchIndex, batch) in appsWithIcons.chunked(batchSize).withIndex()) {
+        appsWithIcons.forEachBatch { _, batch ->
             for (app in batch) {
                 val appFileName = app.getFileName()
 
@@ -165,30 +160,19 @@ class IconPackBuilder(
                 drawableXml.item(appFileName)
                 appfilterXml.item(app.packageName, app.activityName, appFileName)
             }
-
-            // Hint GC to run after each batch to free up memory from recycled bitmaps
-            if (batchIndex < appsWithIcons.chunked(batchSize).size - 1) {
-                System.gc()
-            }
         }
 
         for (calendarIcon in calendarIcons) {
             appfilterXml.calendar(calendarIcon.key.packageName, calendarIcon.key.activityName, calendarIcon.value)
         }
 
-        // Process calendar icons in batches to avoid OOM
-        // Each calendar app has 31 day icons, so multiple calendar apps can quickly accumulate
-        // Drawable.toBitmap() creates new bitmaps each time, so they are safe to recycle
-        val calendarDrawablesList = calendarIconsDrawable.entries.toList()
-        for ((batchIndex, batch) in calendarDrawablesList.chunked(ICON_BATCH_SIZE).withIndex()) {
+        // Process calendar icons in batches to avoid OOM.
+        // Each calendar app has 31 day icons, so multiple calendar apps can quickly accumulate.
+        // Drawable.toBitmap() creates new bitmaps each time, so they are safe to recycle.
+        calendarIconsDrawable.entries.toList().forEachBatch { _, batch ->
             for (drawable in batch) {
                 createBitmapResource(apkModule, packageBlock, drawable.value.toBitmap(), drawable.key, recycleBitmap = true)
                 drawableXml.item(drawable.key)
-            }
-
-            // Hint GC to run after each batch to free up memory from recycled bitmaps
-            if (batchIndex < calendarDrawablesList.chunked(ICON_BATCH_SIZE).size - 1) {
-                System.gc()
             }
         }
 

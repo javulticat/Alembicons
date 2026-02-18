@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.kaanelloed.iconeration.data.AlchemiconPackDatabase
 import com.kaanelloed.iconeration.data.DbApplication
+import com.kaanelloed.iconeration.extension.BATCH_SIZE
 import com.kaanelloed.iconeration.extension.toBase64
 import org.junit.After
 import org.junit.Assert.*
@@ -56,7 +57,7 @@ class IconSaveMemoryTest {
 
         // Simulate 150 apps (3 batches with batch size of 50)
         val totalApps = 150
-        val batchSize = ApplicationProvider.DB_SAVE_BATCH_SIZE
+        val batchSize = BATCH_SIZE
 
         dao.deleteAllApplications()
 
@@ -117,7 +118,7 @@ class IconSaveMemoryTest {
         val baselineUsedMemory = runtime.totalMemory() - runtime.freeMemory()
 
         // Process multiple bitmaps in batches
-        val batchSize = ApplicationProvider.DB_SAVE_BATCH_SIZE
+        val batchSize = BATCH_SIZE
         val numBatches = 3
 
         repeat(numBatches) { batchIndex ->

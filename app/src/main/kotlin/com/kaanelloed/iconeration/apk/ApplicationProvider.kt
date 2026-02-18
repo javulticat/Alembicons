@@ -43,6 +43,7 @@ import com.kaanelloed.iconeration.data.getStringValue
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.sizeIsGreaterThanZero
 import com.kaanelloed.iconeration.drawable.ResourceDrawable
 import com.kaanelloed.iconeration.extension.bitmapFromBase64
+import com.kaanelloed.iconeration.extension.forEachBatch
 import com.kaanelloed.iconeration.icon.BitmapIcon
 import com.kaanelloed.iconeration.icon.EmptyIcon
 import com.kaanelloed.iconeration.icon.ExportableIcon
@@ -226,21 +227,26 @@ class ApplicationProvider(private val context: Context) {
 
         val builder = IconGenerator(context, opt, pack1, pack2)
 
-        // Build index lookup for O(1) access during batch icon generation
-        val appIndexMap = HashMap<PackageInfoStruct, Int>(applicationList.size)
-        for ((index, app) in applicationList.withIndex()) {
-            appIndexMap[app] = index
-        }
-
-        val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
-        builder.generateIcons(applicationList) { application, icon ->
-            val index = appIndexMap[application]
-            if (index != null) {
-                edits.add(Pair(index, application.changeExport(icon)))
+        // Process apps in batches to limit peak memory usage.
+        // Without batching, generating icons for 500+ apps in a tight loop
+        // accumulates hundreds of intermediate bitmaps and ExportableIcon
+        // objects simultaneously, causing OOM crashes.
+        applicationList.forEachBatch { batchStart, batch ->
+            val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
+            val batchIndexMap = HashMap<PackageInfoStruct, Int>(batch.size)
+            for (i in batch.indices) {
+                batchIndexMap[batch[i]] = batchStart + i
             }
+
+            builder.generateIcons(batch) { application, icon ->
+                val index = batchIndexMap[application]
+                if (index != null) {
+                    edits.add(Pair(index, application.changeExport(icon)))
+                }
+            }
+            preWarmEditBitmaps(edits)
+            editApplicationsBatch(edits)
         }
-        preWarmEditBitmaps(edits)
-        editApplicationsBatch(edits)
     }
 
     fun getIcon(application: PackageInfoStruct, options: GenerationOptions, customIcon: ResourceDrawable? = null): ExportableIcon {
@@ -363,12 +369,11 @@ class ApplicationProvider(private val context: Context) {
         // Delete all existing entries first
         packDao.deleteAllApplications()
 
-        // Process apps in batches to avoid OOM with many installed apps
-        // Converting icons to Base64 strings is memory-intensive
-        val batchSize = DB_SAVE_BATCH_SIZE
+        // Process apps in batches to avoid OOM with many installed apps.
+        // Converting icons to Base64 strings is memory-intensive.
         val appsWithIcons = applicationList.filter { it.createdIcon !is EmptyIcon }
 
-        for (batch in appsWithIcons.chunked(batchSize)) {
+        appsWithIcons.forEachBatch { _, batch ->
             val dbApps = batch.map { app ->
                 val isXml = app.createdIcon is VectorIcon
                 DbApplication(
@@ -380,11 +385,7 @@ class ApplicationProvider(private val context: Context) {
                 )
             }
 
-            // Insert this batch
             packDao.insertAll(dbApps)
-
-            // Hint GC to free memory from Base64 string conversions
-            System.gc()
         }
 
         db.close()
@@ -412,12 +413,6 @@ class ApplicationProvider(private val context: Context) {
                 newApp.listBitmap // trigger lazy init
             }
         }
-    }
-
-    companion object {
-        // Batch size for saving icons to database to avoid OOM
-        // Each icon's Base64 string can be 50-100KB
-        const val DB_SAVE_BATCH_SIZE = 25
     }
 
     private fun getAppFilterElements() {
