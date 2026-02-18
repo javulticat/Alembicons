@@ -18,7 +18,6 @@ import com.kaanelloed.iconeration.R
 import com.kaanelloed.iconeration.constants.SuppressDeprecation
 import com.kaanelloed.iconeration.constants.SuppressSameParameterValue
 import com.kaanelloed.iconeration.data.InstalledApplication
-import com.kaanelloed.iconeration.extension.BATCH_SIZE
 import com.kaanelloed.iconeration.extension.getBytes
 import com.kaanelloed.iconeration.extension.forEachBatch
 import com.kaanelloed.iconeration.icon.BitmapIcon
@@ -129,7 +128,7 @@ class IconPackBuilder(
         // Process apps in batches to avoid OOM with many installed apps
         val appsWithIcons = apps.filter { it.createdIcon !is EmptyIcon }
 
-        appsWithIcons.forEachBatch(BATCH_SIZE) { _, batch ->
+        appsWithIcons.forEachBatch { _, batch ->
             for (app in batch) {
                 val appFileName = app.getFileName()
 
@@ -170,7 +169,7 @@ class IconPackBuilder(
         // Process calendar icons in batches to avoid OOM.
         // Each calendar app has 31 day icons, so multiple calendar apps can quickly accumulate.
         // Drawable.toBitmap() creates new bitmaps each time, so they are safe to recycle.
-        calendarIconsDrawable.entries.toList().forEachBatch(BATCH_SIZE) { _, batch ->
+        calendarIconsDrawable.entries.toList().forEachBatch { _, batch ->
             for (drawable in batch) {
                 createBitmapResource(apkModule, packageBlock, drawable.value.toBitmap(), drawable.key, recycleBitmap = true)
                 drawableXml.item(drawable.key)

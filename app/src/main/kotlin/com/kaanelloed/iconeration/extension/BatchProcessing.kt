@@ -22,7 +22,7 @@ const val BATCH_SIZE = 50
  * Used by [ApplicationProvider.refreshIcons], [ApplicationProvider.saveAlchemiconPack],
  * and [IconPackBuilder.buildAndSign].
  */
-inline fun <T> List<T>.forEachBatch(batchSize: Int, action: (startIndex: Int, batch: List<T>) -> Unit) {
+inline fun <T> List<T>.forEachBatch(batchSize: Int = BATCH_SIZE, action: (startIndex: Int, batch: List<T>) -> Unit) {
     for (batchStart in indices step batchSize) {
         val batch = subList(batchStart, minOf(batchStart + batchSize, size))
         action(batchStart, batch)

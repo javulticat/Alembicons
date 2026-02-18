@@ -42,7 +42,6 @@ import com.kaanelloed.iconeration.data.getEnumValue
 import com.kaanelloed.iconeration.data.getStringValue
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.sizeIsGreaterThanZero
 import com.kaanelloed.iconeration.drawable.ResourceDrawable
-import com.kaanelloed.iconeration.extension.BATCH_SIZE
 import com.kaanelloed.iconeration.extension.bitmapFromBase64
 import com.kaanelloed.iconeration.extension.forEachBatch
 import com.kaanelloed.iconeration.icon.BitmapIcon
@@ -232,7 +231,7 @@ class ApplicationProvider(private val context: Context) {
         // Without batching, generating icons for 500+ apps in a tight loop
         // accumulates hundreds of intermediate bitmaps and ExportableIcon
         // objects simultaneously, causing OOM crashes.
-        applicationList.forEachBatch(BATCH_SIZE) { batchStart, batch ->
+        applicationList.forEachBatch { batchStart, batch ->
             val edits = mutableListOf<Pair<Int, PackageInfoStruct>>()
             val batchIndexMap = HashMap<PackageInfoStruct, Int>(batch.size)
             for (i in batch.indices) {
@@ -374,7 +373,7 @@ class ApplicationProvider(private val context: Context) {
         // Converting icons to Base64 strings is memory-intensive.
         val appsWithIcons = applicationList.filter { it.createdIcon !is EmptyIcon }
 
-        appsWithIcons.forEachBatch(BATCH_SIZE) { _, batch ->
+        appsWithIcons.forEachBatch { _, batch ->
             val dbApps = batch.map { app ->
                 val isXml = app.createdIcon is VectorIcon
                 DbApplication(
