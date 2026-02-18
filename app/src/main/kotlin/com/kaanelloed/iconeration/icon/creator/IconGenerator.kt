@@ -63,7 +63,7 @@ class IconGenerator(
 
     // Cache Resources lookups to avoid repeated IPC via getResourcesForApplication()
     // when processing 500+ apps that all reference the same icon pack.
-    private val resourcesCache = HashMap<String, Resources?>()
+    private val resourcesCache = ResourceCache<Resources> { appManager.getResources(it) }
     fun generateIcon(application: PackageInfoStruct,
                      onUpdate: (application: PackageInfoStruct, icon: ExportableIcon) -> Unit) {
         generateIcons(listOf(application), onUpdate)
@@ -215,18 +215,9 @@ class IconGenerator(
         return VectorIcon(newIcon)
     }
 
-    private fun getCachedResources(packageName: String): Resources? {
-        if (resourcesCache.containsKey(packageName)) {
-            return resourcesCache[packageName]
-        }
-        val res = appManager.getResources(packageName)
-        resourcesCache[packageName] = res
-        return res
-    }
-
     private fun parseApplicationIcon(application: PackageInfoStruct): BaseIcon {
         if (isVectorDrawable(application.icon) && options.vector) {
-            val res = getCachedResources(application.packageName) ?: return EmptyIcon()
+            val res = resourcesCache.get(application.packageName) ?: return EmptyIcon()
             return IconParser.parseDrawable(res, application.icon, application.iconID)
         }
 
@@ -410,7 +401,7 @@ class IconGenerator(
     private fun exportIconPackXML(iconPackName: String, iconDrawable: ResourceDrawable): ExportableIcon? {
         if (!isVectorDrawable(iconDrawable.drawable)) return null
 
-        val res = getCachedResources(iconPackName) ?: return null
+        val res = resourcesCache.get(iconPackName) ?: return null
         val parser = appManager.getPackageResourceXml(iconPackName, iconDrawable.resourceId) ?: return null
 
         val adaptiveIcon = AdaptiveIconParser.parse(res, parser.toXmlNode()) ?: return null

@@ -4,152 +4,138 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * Tests for the resource caching pattern used by [IconGenerator].
- *
- * IconGenerator caches [android.content.res.Resources] lookups to avoid
- * repeated IPC via getResourcesForApplication() when processing 500+ apps
- * that all reference the same icon pack. These tests verify the caching
- * contract using a simulated cache.
+ * Tests for [ResourceCache], which is used by [IconGenerator] to cache
+ * [android.content.res.Resources] lookups and avoid repeated IPC via
+ * getResourcesForApplication() when processing 500+ apps that all
+ * reference the same icon pack.
  */
 class IconGeneratorResourceCacheTest {
 
-    /**
-     * Simulates the Resources cache in IconGenerator:
-     *   private val resourcesCache = HashMap<String, Resources?>()
-     *   private fun getCachedResources(packageName: String): Resources? {
-     *       return resourcesCache.getOrPut(packageName) { appManager.getResources(packageName) }
-     *   }
-     */
-    private class ResourceCache {
-        var lookupCount = 0
-            private set
-        private val cache = HashMap<String, String?>()
+    /** Creates a [ResourceCache] whose loader tracks call count via [lookupCount]. */
+    private var lookupCount = 0
 
-        fun getCached(packageName: String): String? {
-            if (cache.containsKey(packageName)) {
-                return cache[packageName]
-            }
+    private fun createCache(): ResourceCache<String> {
+        lookupCount = 0
+        return ResourceCache { packageName ->
             lookupCount++
-            val result = if (packageName == "missing.pack") null else "resources_for_$packageName"
-            cache[packageName] = result
-            return result
+            if (packageName == "missing.pack") null else "resources_for_$packageName"
         }
     }
 
     @Test
     fun `cache returns same result on repeated lookups`() {
-        val cache = ResourceCache()
+        val cache = createCache()
 
-        val first = cache.getCached("com.example.iconpack")
-        val second = cache.getCached("com.example.iconpack")
+        val first = cache.get("com.example.iconpack")
+        val second = cache.get("com.example.iconpack")
 
         assertEquals(first, second)
     }
 
     @Test
     fun `cache avoids repeated IPC for same icon pack`() {
-        val cache = ResourceCache()
+        val cache = createCache()
 
         // Simulate 500 apps all using the same icon pack
         repeat(500) {
-            cache.getCached("com.example.iconpack")
+            cache.get("com.example.iconpack")
         }
 
         assertEquals(
             "Resources for the same package should only be loaded once",
-            1, cache.lookupCount
+            1, lookupCount
         )
     }
 
     @Test
     fun `cache loads different packages independently`() {
-        val cache = ResourceCache()
+        val cache = createCache()
 
-        cache.getCached("com.pack.primary")
-        cache.getCached("com.pack.secondary")
+        cache.get("com.pack.primary")
+        cache.get("com.pack.secondary")
 
-        assertEquals("Two different packages should trigger two lookups", 2, cache.lookupCount)
-        assertEquals("resources_for_com.pack.primary", cache.getCached("com.pack.primary"))
-        assertEquals("resources_for_com.pack.secondary", cache.getCached("com.pack.secondary"))
-        assertEquals("Repeat lookups should still be 2", 2, cache.lookupCount)
+        assertEquals("Two different packages should trigger two lookups", 2, lookupCount)
+        assertEquals("resources_for_com.pack.primary", cache.get("com.pack.primary"))
+        assertEquals("resources_for_com.pack.secondary", cache.get("com.pack.secondary"))
+        assertEquals("Repeat lookups should still be 2", 2, lookupCount)
     }
 
     @Test
     fun `cache handles null results correctly`() {
-        val cache = ResourceCache()
+        val cache = createCache()
 
         // First lookup returns null (package not found)
-        val result = cache.getCached("missing.pack")
+        val result = cache.get("missing.pack")
         assertNull("Missing package should return null", result)
 
         // Second lookup should reuse cached null, not retry IPC
-        val second = cache.getCached("missing.pack")
+        val second = cache.get("missing.pack")
         assertNull("Cached null should be returned", second)
-        assertEquals("Null result should be cached, not retried", 1, cache.lookupCount)
+        assertEquals("Null result should be cached, not retried", 1, lookupCount)
     }
 
     @Test
     fun `cache with mixed packages scales correctly`() {
-        val cache = ResourceCache()
+        val cache = createCache()
 
         // Simulate refreshIcons: 500 apps, primary pack = "com.pack.a", secondary = "com.pack.b"
         // Each app checks both packs
         repeat(500) {
-            cache.getCached("com.pack.a")
-            cache.getCached("com.pack.b")
+            cache.get("com.pack.a")
+            cache.get("com.pack.b")
         }
 
         assertEquals(
             "1000 lookups across 2 packages should only trigger 2 actual loads",
-            2, cache.lookupCount
+            2, lookupCount
         )
     }
 
     @Test
     fun `cache eliminates redundant IPC in parseApplicationIcon pattern`() {
-        val cache = ResourceCache()
+        val cache = createCache()
 
-        // parseApplicationIcon calls getCachedResources(application.packageName)
+        // parseApplicationIcon calls resourcesCache.get(application.packageName)
         // for each app. Each app has a unique package name, so no caching benefit
         // UNLESS the same app package appears multiple times (unlikely).
         // The main benefit is for icon pack lookups in exportIconPackXML.
         val uniquePackages = (0 until 500).map { "com.app.$it" }
 
         for (pkg in uniquePackages) {
-            cache.getCached(pkg)
+            cache.get(pkg)
         }
 
         assertEquals(
             "500 unique packages should trigger 500 lookups (cache prevents re-lookups)",
-            500, cache.lookupCount
+            500, lookupCount
         )
 
         // Second pass should be entirely cached
         for (pkg in uniquePackages) {
-            cache.getCached(pkg)
+            cache.get(pkg)
         }
 
         assertEquals(
             "Second pass should reuse cache, still 500 lookups total",
-            500, cache.lookupCount
+            500, lookupCount
         )
     }
 
     @Test
     fun `cache eliminates redundant IPC in exportIconPackXML pattern`() {
-        val cache = ResourceCache()
+        val cache = createCache()
 
-        // exportIconPackXML calls getCachedResources(iconPackName) for the same
+        // exportIconPackXML calls resourcesCache.get(iconPackName) for the same
         // icon pack on every app. This is the primary win.
         val iconPackName = "com.arcticons.iconpack"
 
         repeat(500) {
-            cache.getCached(iconPackName) // was: ApplicationManager(ctx).getResources(iconPackName)
+            cache.get(iconPackName)
         }
 
         assertEquals(
             "500 calls for the same icon pack should trigger only 1 actual load",
-            1, cache.lookupCount
+            1, lookupCount
         )
     }
 
