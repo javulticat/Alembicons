@@ -216,9 +216,12 @@ class IconGenerator(
     }
 
     private fun getCachedResources(packageName: String): Resources? {
-        return resourcesCache.getOrPut(packageName) {
-            appManager.getResources(packageName)
+        if (resourcesCache.containsKey(packageName)) {
+            return resourcesCache[packageName]
         }
+        val res = appManager.getResources(packageName)
+        resourcesCache[packageName] = res
+        return res
     }
 
     private fun parseApplicationIcon(application: PackageInfoStruct): BaseIcon {

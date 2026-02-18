@@ -26,10 +26,13 @@ class IconGeneratorResourceCacheTest {
         private val cache = HashMap<String, String?>()
 
         fun getCached(packageName: String): String? {
-            return cache.getOrPut(packageName) {
-                lookupCount++
-                if (packageName == "missing.pack") null else "resources_for_$packageName"
+            if (cache.containsKey(packageName)) {
+                return cache[packageName]
             }
+            lookupCount++
+            val result = if (packageName == "missing.pack") null else "resources_for_$packageName"
+            cache[packageName] = result
+            return result
         }
     }
 
