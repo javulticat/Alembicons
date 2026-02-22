@@ -335,83 +335,93 @@ class ApplicationProviderTest {
     // --- Batched refresh pattern tests ---
 
     @Test
-    fun `refreshIcons accumulates all edits and applies single state update`() {
-        // Verifies the consolidated pattern introduced to fix stutter/crash:
-        // edits are collected from ALL batches into allEdits, then applied
-        // via a SINGLE editApplicationsBatch call after the loop.
+    fun `refreshIcons commits each batch immediately releasing old objects`() {
+        // Verifies the per-batch commit pattern used by refreshIcons():
+        // each batch calls editApplicationsBatch() immediately after generation
+        // so old PackageInfoStruct objects from previous indices become eligible
+        // for GC before the next batch generates new ones.  This prevents doubling
+        // peak memory (all old icons + all new icons alive simultaneously).
         //
-        // The old (buggy) pattern called editApplicationsBatch INSIDE the loop:
+        // A previous (buggy) approach accumulated all edits first:
+        //   forEachBatch { batch -> allEdits.addAll(batchEdits) }
+        //   editApplicationsBatch(allEdits)   // one call AFTER all batches
+        //
+        // That approach held all N new objects alive while the N old objects were
+        // still in applicationList, making peak memory = old list + new list.
+        //
+        // The correct per-batch pattern commits inside the loop:
         //   forEachBatch { batch -> ... editApplicationsBatch(batchEdits) }  // N calls
         //
-        // This new pattern calls it ONCE after the loop:
-        //   forEachBatch { batch -> ... allEdits.addAll(batchEdits) }
-        //   editApplicationsBatch(allEdits)                                  // 1 call
-        //
-        // Each editApplicationsBatch call writes to mutableStateOf, triggering a
-        // Compose recomposition that re-renders all visible LazyColumn items.
-        // For 500 apps / 50 batch size = 10 batches: old = 10 recompositions,
-        // new = 1 recomposition. This eliminates 9 redundant full-list re-renders.
+        // Peak memory per batch ≈ BATCH_SIZE new objects + remaining old objects.
 
         val apps = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
-        val allEdits = mutableListOf<Pair<Int, AppKey>>()
         var stateUpdateCount = 0
+        val result = apps.toMutableList()
 
-        // Phase 1: collect edits across all batches (no state update)
+        val expectedBatches = (apps.size + BATCH_SIZE - 1) / BATCH_SIZE
+
         apps.forEachBatch(BATCH_SIZE) { batchStart, batch ->
             val batchIndexMap = HashMap<AppKey, Int>(batch.size)
             for (i in batch.indices) {
                 batchIndexMap[batch[i]] = batchStart + i
             }
+
+            val batchEdits = mutableListOf<Pair<Int, AppKey>>()
             for (app in batch) {
                 val index = batchIndexMap[app]
                 if (index != null) {
-                    allEdits.add(Pair(index, app.changeExport()))
+                    batchEdits.add(Pair(index, app.changeExport()))
                 }
             }
-            // No state update inside the loop
+
+            // Commit this batch immediately (one state update per batch)
+            stateUpdateCount++
+            for ((index, newApp) in batchEdits) {
+                result[index] = newApp
+            }
+            // batchEdits goes out of scope here, previous-batch objects are eligible for GC
         }
 
-        // Phase 2: single state update after all batches
-        stateUpdateCount++
-        val result = apps.toMutableList()
-        for ((index, newApp) in allEdits) {
-            result[index] = newApp
-        }
-
-        assertEquals("Should trigger exactly one state update for all 500 apps", 1, stateUpdateCount)
-        assertEquals("All 500 apps should have edits", 500, allEdits.size)
+        assertEquals(
+            "Per-batch approach should trigger one state update per batch",
+            expectedBatches, stateUpdateCount
+        )
         for ((index, app) in result.withIndex()) {
             assertEquals("App at $index should have incremented version", 1, app.internalVersion)
         }
     }
 
     @Test
-    fun `batched refresh processes all items with correct indices`() {
-        // Simulate the exact refreshIcons batch pattern using forEachBatch
+    fun `batched refresh with per-batch commits processes all items with correct indices`() {
+        // Simulates the exact refreshIcons loop: a local batchEdits list is created
+        // per batch, committed, then discarded, rather than accumulating all edits
+        // into a persistent allEdits list across all batches.
         val apps = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
-        val allEdits = mutableListOf<Pair<Int, AppKey>>()
+        val result = apps.toMutableList()
 
-        val batchSize = BATCH_SIZE
-        apps.forEachBatch(batchSize) { batchStart, batch ->
+        apps.forEachBatch(BATCH_SIZE) { batchStart, batch ->
             val batchIndexMap = HashMap<AppKey, Int>(batch.size)
             for (i in batch.indices) {
                 batchIndexMap[batch[i]] = batchStart + i
             }
 
+            val batchEdits = mutableListOf<Pair<Int, AppKey>>()
             for (app in batch) {
                 val index = batchIndexMap[app]
                 if (index != null) {
-                    allEdits.add(Pair(index, app.changeExport()))
+                    batchEdits.add(Pair(index, app.changeExport()))
                 }
+            }
+
+            for ((index, newApp) in batchEdits) {
+                result[index] = newApp
             }
         }
 
-        assertEquals("All 500 apps should produce edits", 500, allEdits.size)
-
-        // Verify indices are sequential and correct
-        for ((idx, edit) in allEdits.withIndex()) {
-            assertEquals("Edit $idx should have correct absolute index", idx, edit.first)
-            assertEquals("Edit $idx should have correct package name", "com.pkg.$idx", edit.second.packageName)
+        // Verify all items have been updated with correct indices
+        for ((index, app) in result.withIndex()) {
+            assertEquals("App at $index should have correct package", "com.pkg.$index", app.packageName)
+            assertEquals("App at $index should have incremented version", 1, app.internalVersion)
         }
     }
 
@@ -552,9 +562,11 @@ class ApplicationProviderTest {
         // Simulates the exact pattern from loadAlchemiconPack:
         //   preWarmEditBitmaps(edits)
         //   editApplicationsBatch(edits)
-        // Note: refreshIcons() no longer uses this pattern because it accumulates
-        // all edits across batches and applies them in a single editApplicationsBatch
-        // call after the loop, reducing Compose recompositions from N_batches to 1.
+        // Note: refreshIcons() does not need preWarmEditBitmaps because changeExport()
+        // passes the original PackageInfoStruct's already-computed listBitmap through
+        // the cachedListBitmap constructor parameter, so the lazy property on each new
+        // PackageInfoStruct is already satisfied with a non-null value before the
+        // batch is committed — no computation needs to happen on the main thread.
         val events = mutableListOf<String>()
 
         val edits = (0 until 50).map { index ->
