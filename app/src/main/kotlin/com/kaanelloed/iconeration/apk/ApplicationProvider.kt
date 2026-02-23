@@ -227,35 +227,37 @@ class ApplicationProvider(private val context: Context) {
 
         val builder = IconGenerator(context, opt, pack1, pack2)
 
-        // Accumulate all edits across batches and apply them in a single
-        // editApplicationsBatch call after the loop.  Calling editApplicationsBatch
-        // inside the loop (once per batch of 50) wrote to the mutableStateOf list
-        // on every iteration, triggering 10 separate Compose recompositions for
-        // 500 apps — each recomposition caused the LazyColumn to re-render all
-        // visible items and copied the full list twice.  A single call at the end
-        // reduces this to one recomposition and two list copies regardless of app count.
+        // Process apps in batches and commit each batch immediately via
+        // editApplicationsBatch.  Accumulating all edits before committing
+        // (the previous approach) held all new ExportableIcon/PackageInfoStruct
+        // objects alive in allEdits while the old ones were still referenced by
+        // applicationList, doubling peak icon-bitmap memory for 500+ apps.
         //
-        // Memory is still bounded by the batching: generateIcons is called with
-        // at most BATCH_SIZE apps at a time, limiting the number of intermediate
-        // ExportableIcon objects in flight.  The accumulated PackageInfoStruct
-        // objects in allEdits share their listBitmap with the original objects via
-        // cachedListBitmap (passed through changeExport), so no extra bitmaps are
-        // allocated during accumulation.
-        val allEdits = mutableListOf<Pair<Int, PackageInfoStruct>>()
+        // Committing per-batch lets the GC reclaim replaced icons incrementally:
+        // after each editApplicationsBatch call the old PackageInfoStruct objects
+        // for that batch are unreferenced and eligible for collection before the
+        // next batch starts generating new ones.
+        //
+        // The Compose recompositions triggered per batch are asynchronous — they
+        // run on the main thread while this background thread keeps generating
+        // icons without waiting.  Each batch list-copy is only 8 bytes × N (pointer
+        // array), so the transient allocation per batch is negligible compared to
+        // the peak savings of not holding all icons simultaneously.
         applicationList.forEachBatch { batchStart, batch ->
             val batchIndexMap = HashMap<PackageInfoStruct, Int>(batch.size)
             for (i in batch.indices) {
                 batchIndexMap[batch[i]] = batchStart + i
             }
 
+            val batchEdits = mutableListOf<Pair<Int, PackageInfoStruct>>()
             builder.generateIcons(batch) { application, icon ->
                 val index = batchIndexMap[application]
                 if (index != null) {
-                    allEdits.add(Pair(index, application.changeExport(icon)))
+                    batchEdits.add(Pair(index, application.changeExport(icon)))
                 }
             }
+            editApplicationsBatch(batchEdits)
         }
-        editApplicationsBatch(allEdits)
     }
 
     fun getIcon(application: PackageInfoStruct, options: GenerationOptions, customIcon: ResourceDrawable? = null): ExportableIcon {

@@ -225,6 +225,88 @@ class DrawableExtensionTest {
         result2.recycle()
     }
 
+    // --- Bitmap mutability and recycling safety tests ---
+    // IconGenerator.generateImage() recycles the intermediate bitmapIcon (obtained
+    // via shrinkIfBiggerThan) whenever it is not the returned icon's payload, using
+    // the guard: if (bitmapIcon.isMutable && !bitmapIcon.isRecycled) bitmapIcon.recycle()
+    //
+    // The isMutable check is load-bearing:
+    //   - Bitmaps produced by shrinking (toBitmap with explicit dimensions) or by
+    //     Canvas-draw rendering (VectorDrawable, AdaptiveIconDrawable foreground)
+    //     are MUTABLE — they are fresh allocations we own and can recycle.
+    //   - BitmapDrawables whose bitmap fits within the size limit return their
+    //     internal bitmap via AndroidX's fast path; those bitmaps may be IMMUTABLE
+    //     (resource bitmaps decoded by BitmapFactory default to immutable).
+    //     Recycling an immutable shared resource bitmap would corrupt the source
+    //     drawable and any other reference (e.g. PackageInfoStruct.listBitmap).
+    //
+    // These tests verify the properties that the recycling guard depends on.
+
+    @Test
+    fun shrinkIfBiggerThan_producesNewMutableBitmapWhenShrinking() {
+        // When shrinkIfBiggerThan actually shrinks the drawable (maxWidthOrHeight > size),
+        // it calls toBitmap(newWidth, newHeight) which always allocates a fresh bitmap
+        // via Canvas.  The result is a mutable, independently owned bitmap that
+        // generateImage() can safely recycle once it has been consumed.
+        val drawable = createDrawableWithSize(1000, 1000)
+        val maxSize = DrawableExtension.MAX_ICON_PROCESS_SIZE // 500
+
+        val result = drawable.shrinkIfBiggerThan(maxSize)
+
+        assertTrue(
+            "A shrunken bitmap must be mutable — it is a fresh allocation that generateImage() can safely recycle",
+            result.isMutable
+        )
+        assertFalse("Bitmap should not be recycled before use", result.isRecycled)
+
+        result.recycle()
+        assertTrue("Mutable bitmap should be recyclable after use", result.isRecycled)
+    }
+
+    @Test
+    fun shrinkIfBiggerThan_recyclingMutableResultDoesNotAffectSourceDrawable() {
+        // Verifies that recycling a shrunken bitmap does not corrupt the source
+        // drawable — the two are independent objects.
+        val sourceBitmap = Bitmap.createBitmap(1000, 1000, Bitmap.Config.ARGB_8888)
+        val drawable = BitmapDrawable(context.resources, sourceBitmap)
+        val maxSize = DrawableExtension.MAX_ICON_PROCESS_SIZE // 500
+
+        val shrunken = drawable.shrinkIfBiggerThan(maxSize)
+        assertTrue("Shrunken result should be mutable", shrunken.isMutable)
+
+        shrunken.recycle()
+
+        // The source drawable's bitmap must be unaffected
+        assertFalse(
+            "Recycling the shrunken bitmap must not recycle the source drawable's bitmap",
+            sourceBitmap.isRecycled
+        )
+        assertEquals("Source bitmap dimensions must be unchanged", 1000, sourceBitmap.width)
+
+        sourceBitmap.recycle()
+    }
+
+    @Test
+    fun mutableBitmapRecycleGuard_preventsDoubleRecycle() {
+        // Verifies the guard pattern used in generateImage():
+        //   if (bitmapIcon.isMutable && !bitmapIcon.isRecycled) bitmapIcon.recycle()
+        //
+        // After the first recycle, isRecycled == true so the guard prevents a
+        // second recycle() call that would throw an exception.
+        val bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        assertTrue("Fresh bitmap must be mutable", bitmap.isMutable)
+        assertFalse("Fresh bitmap must not be recycled", bitmap.isRecycled)
+
+        // First recycle: guard passes, bitmap is recycled
+        if (bitmap.isMutable && !bitmap.isRecycled) bitmap.recycle()
+        assertTrue("Bitmap should be recycled after first guarded recycle", bitmap.isRecycled)
+
+        // Second recycle attempt: guard blocks it (isRecycled == true)
+        // Without the guard this would throw or cause undefined behaviour
+        if (bitmap.isMutable && !bitmap.isRecycled) bitmap.recycle()
+        assertTrue("Bitmap should still be recycled and no exception thrown", bitmap.isRecycled)
+    }
+
     @Test
     fun maxIconListSize_isReasonableForDisplayUse() {
         val maxSize = DrawableExtension.MAX_ICON_LIST_SIZE

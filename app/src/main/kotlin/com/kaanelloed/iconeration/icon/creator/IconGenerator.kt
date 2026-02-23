@@ -183,13 +183,47 @@ class IconGenerator(
         parsedIcon: BaseIcon,
         imageEdit: ImageEdit,
         mode: PorterDuff.Mode): ExportableIcon {
-        val defaultIcon = getDefaultIcon(bitmapIcon, parsedIcon)
-
+        // bitmapIcon is created by shrinkIfBiggerThan() on the source drawable.
+        // When shrinking occurs, or when the drawable renders via Canvas
+        // (VectorDrawable, AdaptiveIconDrawable foreground), the result is a
+        // fresh mutable Bitmap that we own and must recycle.  When a BitmapDrawable
+        // fits within the size limit, shrinkIfBiggerThan() returns the drawable's
+        // internal Bitmap directly — an immutable, shared reference decoded from
+        // resources that we must NOT recycle.
+        //
+        // We therefore recycle bitmapIcon only when it is mutable (= a fresh
+        // allocation we own) AND when it is not carried as the payload of the
+        // returned ExportableIcon.  The only path that must keep bitmapIcon alive
+        // is NONE → BitmapIcon: the BitmapIcon takes ownership of the bitmap.
         return when (imageEdit) {
-            ImageEdit.NONE -> defaultIcon
-            ImageEdit.PATH -> generatePathTracing(bitmapIcon, parsedIcon)
-            ImageEdit.EDGE -> generateCannyEdgeDetection(bitmapIcon)
-            ImageEdit.COLORIZE -> colorizeImage(bitmapIcon, parsedIcon, mode)
+            ImageEdit.NONE -> {
+                val result = getDefaultIcon(bitmapIcon, parsedIcon)
+                // parsedIcon was VectorIcon → result is VectorIcon, bitmapIcon unused
+                if (result !is BitmapIcon && bitmapIcon.isMutable && !bitmapIcon.isRecycled) {
+                    bitmapIcon.recycle()
+                }
+                result
+            }
+            ImageEdit.PATH -> {
+                // Result is always VectorIcon; bitmapIcon was used as trace input
+                val result = generatePathTracing(bitmapIcon, parsedIcon)
+                if (bitmapIcon.isMutable && !bitmapIcon.isRecycled) bitmapIcon.recycle()
+                result
+            }
+            ImageEdit.EDGE -> {
+                // edgesImage is a separate bitmap; bitmapIcon was the detector input
+                val result = generateCannyEdgeDetection(bitmapIcon)
+                if (bitmapIcon.isMutable && !bitmapIcon.isRecycled) bitmapIcon.recycle()
+                result
+            }
+            ImageEdit.COLORIZE -> {
+                // colorizeVector ignores bitmapIcon; colorizeBitmap copies it into
+                // coloredIcon via Bitmap.copy() — either way bitmapIcon is not
+                // the result payload
+                val result = colorizeImage(bitmapIcon, parsedIcon, mode)
+                if (bitmapIcon.isMutable && !bitmapIcon.isRecycled) bitmapIcon.recycle()
+                result
+            }
         }
     }
 
