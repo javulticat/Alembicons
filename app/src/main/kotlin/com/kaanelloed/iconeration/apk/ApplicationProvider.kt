@@ -42,6 +42,7 @@ import com.kaanelloed.iconeration.data.getEnumValue
 import com.kaanelloed.iconeration.data.getStringValue
 import com.kaanelloed.iconeration.drawable.DrawableExtension.Companion.sizeIsGreaterThanZero
 import com.kaanelloed.iconeration.drawable.ResourceDrawable
+import com.kaanelloed.iconeration.extension.BATCH_SIZE
 import com.kaanelloed.iconeration.extension.bitmapFromBase64
 import com.kaanelloed.iconeration.extension.forEachBatch
 import com.kaanelloed.iconeration.icon.BitmapIcon
@@ -91,14 +92,7 @@ class ApplicationProvider(private val context: Context) {
         val apps = appManager.getAllInstalledApps()
         apps.sort()
 
-        val appList = apps.toList()
-
-        // Pre-initialize list bitmaps on this (background) thread so they
-        // don't get lazily initialized on the main thread during scroll,
-        // which causes frame drops and OOM crashes with 500+ apps.
-        preWarmListBitmaps(appList)
-
-        applicationList = appList
+        applicationList = apps.toList()
     }
 
     @Suppress(SuppressRedundantSuspendModifier)
@@ -227,23 +221,29 @@ class ApplicationProvider(private val context: Context) {
 
         val builder = IconGenerator(context, opt, pack1, pack2)
 
-        // Process apps in batches and commit each batch immediately via
-        // editApplicationsBatch.  Accumulating all edits before committing
-        // (the previous approach) held all new ExportableIcon/PackageInfoStruct
-        // objects alive in allEdits while the old ones were still referenced by
-        // applicationList, doubling peak icon-bitmap memory for 500+ apps.
+        // Process apps in batches, reading applicationList by index each iteration
+        // rather than capturing the whole list up front.
         //
-        // Committing per-batch lets the GC reclaim replaced icons incrementally:
-        // after each editApplicationsBatch call the old PackageInfoStruct objects
-        // for that batch are unreferenced and eligible for collection before the
-        // next batch starts generating new ones.
+        // The previous approach used applicationList.forEachBatch { ... }, which is an
+        // inline extension whose receiver is evaluated once and stored as a local
+        // variable for the entire loop.  That kept every original PackageInfoStruct
+        // (and its old createdIcon bitmap) alive for the full duration of the refresh,
+        // preventing the GC from reclaiming replaced icons between batches and causing
+        // peak icon-bitmap memory to double for 500+ apps.
         //
-        // The Compose recompositions triggered per batch are asynchronous — they
-        // run on the main thread while this background thread keeps generating
-        // icons without waiting.  Each batch list-copy is only 8 bytes × N (pointer
-        // array), so the transient allocation per batch is negligible compared to
-        // the peak savings of not holding all icons simultaneously.
-        applicationList.forEachBatch { batchStart, batch ->
+        // By reading applicationList[i] dynamically, each batch snapshot (toList()
+        // call) is a local that goes out of scope at the end of its while-body
+        // iteration.  After editApplicationsBatch replaces that batch in
+        // applicationList, the old PackageInfoStructs (with their createdIcon bitmaps)
+        // are referenced only by the local snapshot, which is about to be collected.
+        // The System.gc() hint at the top of the next iteration gives the GC an
+        // opportunity to reclaim them before the next batch's bitmaps are allocated.
+        var batchStart = 0
+        while (batchStart < applicationList.size) {
+            System.gc()
+            val batchEnd = minOf(batchStart + BATCH_SIZE, applicationList.size)
+            val batch = applicationList.subList(batchStart, batchEnd).toList()
+
             val batchIndexMap = HashMap<PackageInfoStruct, Int>(batch.size)
             for (i in batch.indices) {
                 batchIndexMap[batch[i]] = batchStart + i
@@ -257,6 +257,7 @@ class ApplicationProvider(private val context: Context) {
                 }
             }
             editApplicationsBatch(batchEdits)
+            batchStart = batchEnd
         }
     }
 
@@ -400,18 +401,6 @@ class ApplicationProvider(private val context: Context) {
         }
 
         db.close()
-    }
-
-    /**
-     * Pre-initialize listBitmap for all apps so the lazy property is resolved
-     * on a background thread rather than on the main thread during scroll.
-     */
-    private fun preWarmListBitmaps(apps: List<PackageInfoStruct>) {
-        for (app in apps) {
-            if (app.icon.sizeIsGreaterThanZero()) {
-                app.listBitmap // trigger lazy init
-            }
-        }
     }
 
     /**

@@ -262,7 +262,7 @@ class PackageInfoStructListBitmapTest {
             )
         }
 
-        // Pre-warm originals (like initializeApplications does)
+        // Access originals to trigger lazy init (as scroll would do on first display)
         val originalBitmaps = apps.map { it.listBitmap }
 
         // Bulk changeExport (like refreshIcons does)
@@ -277,9 +277,15 @@ class PackageInfoStructListBitmapTest {
     }
 
     // --- Pre-warming tests ---
-    // ApplicationProvider.initializeApplications() now pre-warms listBitmap on a
-    // background thread so the lazy init doesn't happen on the main/composition
-    // thread during scroll. These tests verify that pre-warming behavior.
+    // ApplicationProvider.loadAlchemiconPack() pre-warms listBitmap for edited items
+    // on a background thread via preWarmEditBitmaps() before editApplicationsBatch()
+    // makes them visible to the UI.
+    //
+    // Note: initializeApplications() no longer pre-warms all list bitmaps upfront.
+    // Pre-warming all 500+ apps at init time was removed because it allocated ~130MB
+    // of bitmaps as a constant baseline, causing OOM during refresh on devices with
+    // large app counts. listBitmap is now computed lazily on first scroll access.
+    // These tests verify the general pre-warming capability used by loadAlchemiconPack.
 
     @Test
     fun preWarm_backgroundThreadInitMakesCacheAvailableOnMainThread() {
