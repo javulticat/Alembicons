@@ -335,32 +335,42 @@ class ApplicationProviderTest {
     // --- Batched refresh pattern tests ---
 
     @Test
-    fun `refreshIcons commits each batch immediately releasing old objects`() {
-        // Verifies the per-batch commit pattern used by refreshIcons():
-        // each batch calls editApplicationsBatch() immediately after generation
-        // so old PackageInfoStruct objects from previous indices become eligible
-        // for GC before the next batch generates new ones.  This prevents doubling
-        // peak memory (all old icons + all new icons alive simultaneously).
+    fun `refreshIcons while loop reads applicationList dynamically per batch`() {
+        // Verifies the while-loop pattern used by refreshIcons():
         //
-        // A previous (buggy) approach accumulated all edits first:
-        //   forEachBatch { batch -> allEdits.addAll(batchEdits) }
-        //   editApplicationsBatch(allEdits)   // one call AFTER all batches
+        //   var batchStart = 0
+        //   while (batchStart < applicationList.size) {
+        //       System.gc()
+        //       val batchEnd = minOf(batchStart + BATCH_SIZE, applicationList.size)
+        //       val batch = applicationList.subList(batchStart, batchEnd).toList()
+        //       ... generate icons for batch ...
+        //       editApplicationsBatch(batchEdits)
+        //       batchStart = batchEnd
+        //   }
         //
-        // That approach held all N new objects alive while the N old objects were
-        // still in applicationList, making peak memory = old list + new list.
+        // Unlike the old `applicationList.forEachBatch { ... }` approach, the while
+        // loop reads `applicationList` by index each iteration rather than capturing the
+        // entire list up front.  The inline forEachBatch kept the original list alive
+        // as a local for the whole loop, holding every old PackageInfoStruct (and its
+        // createdIcon bitmap from a prior refresh) in memory for the full duration.
+        // That caused peak icon-bitmap memory to double for 500+ apps.
         //
-        // The correct per-batch pattern commits inside the loop:
-        //   forEachBatch { batch -> ... editApplicationsBatch(batchEdits) }  // N calls
-        //
-        // Peak memory per batch ≈ BATCH_SIZE new objects + remaining old objects.
+        // With the while loop, each batch's local snapshot goes out of scope at the end
+        // of the loop body; System.gc() at the top of the next iteration can then
+        // reclaim the now-unreferenced old objects before the next set of bitmaps is
+        // allocated.
 
-        val apps = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
+        var applicationList = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
         var stateUpdateCount = 0
-        val result = apps.toMutableList()
 
-        val expectedBatches = (apps.size + BATCH_SIZE - 1) / BATCH_SIZE
+        val expectedBatches = (applicationList.size + BATCH_SIZE - 1) / BATCH_SIZE
 
-        apps.forEachBatch(BATCH_SIZE) { batchStart, batch ->
+        var batchStart = 0
+        while (batchStart < applicationList.size) {
+            // System.gc() call omitted in test (no real GC needed in unit test)
+            val batchEnd = minOf(batchStart + BATCH_SIZE, applicationList.size)
+            val batch = applicationList.subList(batchStart, batchEnd).toList()
+
             val batchIndexMap = HashMap<AppKey, Int>(batch.size)
             for (i in batch.indices) {
                 batchIndexMap[batch[i]] = batchStart + i
@@ -374,32 +384,39 @@ class ApplicationProviderTest {
                 }
             }
 
-            // Commit this batch immediately (one state update per batch)
+            // Apply batch edits (updates applicationList to new value)
             stateUpdateCount++
+            val mutable = applicationList.toMutableList()
             for ((index, newApp) in batchEdits) {
-                result[index] = newApp
+                mutable[index] = newApp
             }
-            // batchEdits goes out of scope here, previous-batch objects are eligible for GC
+            applicationList = mutable.toList()
+            batchStart = batchEnd
+            // batch, batchIndexMap, batchEdits now go out of scope here.
+            // Old AppKeys for this batch are no longer in applicationList,
+            // so they become GC-eligible at the next iteration's System.gc().
         }
 
         assertEquals(
-            "Per-batch approach should trigger one state update per batch",
+            "While-loop approach should trigger one state update per batch",
             expectedBatches, stateUpdateCount
         )
-        for ((index, app) in result.withIndex()) {
+        for ((index, app) in applicationList.withIndex()) {
             assertEquals("App at $index should have incremented version", 1, app.internalVersion)
         }
     }
 
     @Test
-    fun `batched refresh with per-batch commits processes all items with correct indices`() {
-        // Simulates the exact refreshIcons loop: a local batchEdits list is created
-        // per batch, committed, then discarded, rather than accumulating all edits
-        // into a persistent allEdits list across all batches.
-        val apps = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
-        val result = apps.toMutableList()
+    fun `batched refresh while loop processes all items with correct indices`() {
+        // Simulates the exact refreshIcons while loop: reads from applicationList
+        // dynamically each iteration so previous-batch items can be reclaimed.
+        var applicationList = (0 until 500).map { AppKey("com.pkg.$it", ".Activity$it") }
 
-        apps.forEachBatch(BATCH_SIZE) { batchStart, batch ->
+        var batchStart = 0
+        while (batchStart < applicationList.size) {
+            val batchEnd = minOf(batchStart + BATCH_SIZE, applicationList.size)
+            val batch = applicationList.subList(batchStart, batchEnd).toList()
+
             val batchIndexMap = HashMap<AppKey, Int>(batch.size)
             for (i in batch.indices) {
                 batchIndexMap[batch[i]] = batchStart + i
@@ -413,15 +430,87 @@ class ApplicationProviderTest {
                 }
             }
 
+            val mutable = applicationList.toMutableList()
             for ((index, newApp) in batchEdits) {
-                result[index] = newApp
+                mutable[index] = newApp
             }
+            applicationList = mutable.toList()
+            batchStart = batchEnd
         }
 
         // Verify all items have been updated with correct indices
-        for ((index, app) in result.withIndex()) {
+        for ((index, app) in applicationList.withIndex()) {
             assertEquals("App at $index should have correct package", "com.pkg.$index", app.packageName)
             assertEquals("App at $index should have incremented version", 1, app.internalVersion)
+        }
+    }
+
+    @Test
+    fun `while loop refresh second pass reads updated items not original capture`() {
+        // Demonstrates the GC-enabling property of the while-loop vs forEachBatch:
+        //
+        // forEachBatch captures the receiver list before the loop starts.  Even after
+        // editApplicationsBatch updates applicationList, the captured reference keeps
+        // all original items alive until the loop finishes.
+        //
+        // The while loop reads applicationList[batchStart..batchEnd] at the START of
+        // each iteration, after the previous batch's local variables have gone out of
+        // scope.  This test verifies that items updated by an earlier batch are seen
+        // as updated when the NEXT batch reads from applicationList.
+        var applicationList = (0 until 10).map { AppKey("com.pkg.$it", ".Activity$it", internalVersion = 0) }
+
+        var batchStart = 0
+        while (batchStart < applicationList.size) {
+            val batchEnd = minOf(batchStart + 5, applicationList.size) // batch size of 5
+            val batch = applicationList.subList(batchStart, batchEnd).toList()
+
+            val batchEdits = mutableListOf<Pair<Int, AppKey>>()
+            for ((i, app) in batch.withIndex()) {
+                batchEdits.add(Pair(batchStart + i, app.changeExport()))
+            }
+
+            val mutable = applicationList.toMutableList()
+            for ((index, newApp) in batchEdits) {
+                mutable[index] = newApp
+            }
+            applicationList = mutable.toList()
+            batchStart = batchEnd
+        }
+
+        // After the loop, all items have been updated to version 1
+        for ((index, app) in applicationList.withIndex()) {
+            assertEquals(
+                "Item $index should be version 1 after one full refresh",
+                1, app.internalVersion
+            )
+        }
+
+        // Run a SECOND refresh to verify the while-loop reads the already-updated items
+        batchStart = 0
+        while (batchStart < applicationList.size) {
+            val batchEnd = minOf(batchStart + 5, applicationList.size)
+            val batch = applicationList.subList(batchStart, batchEnd).toList()
+
+            val batchEdits = mutableListOf<Pair<Int, AppKey>>()
+            for ((i, app) in batch.withIndex()) {
+                // In a real refresh with override=false, apps with non-empty icons are
+                // skipped. Here we simulate override=true by always updating.
+                batchEdits.add(Pair(batchStart + i, app.changeExport()))
+            }
+
+            val mutable = applicationList.toMutableList()
+            for ((index, newApp) in batchEdits) {
+                mutable[index] = newApp
+            }
+            applicationList = mutable.toList()
+            batchStart = batchEnd
+        }
+
+        for ((index, app) in applicationList.withIndex()) {
+            assertEquals(
+                "Item $index should be version 2 after second refresh",
+                2, app.internalVersion
+            )
         }
     }
 
@@ -444,14 +533,21 @@ class ApplicationProviderTest {
     }
 
     // --- Pre-warming pattern tests ---
-    // initializeApplications() pre-warms listBitmap for all items on the background
-    // thread before making the list visible (needed because these objects have
-    // cachedListBitmap = null so the lazy property must compute the bitmap).
-    // loadAlchemiconPack() also pre-warms edited items before editApplicationsBatch().
+    // initializeApplications() does NOT pre-warm listBitmap for all apps.
+    // Pre-warming all 500+ apps at init time was removed because it allocated
+    // ~130MB of bitmaps as a constant baseline, leaving insufficient headroom for
+    // icon generation during refresh and causing OOM crashes with 500+ installed apps.
+    // listBitmap is now computed lazily on first scroll access (once per PackageInfoStruct
+    // instance, then cached; passed through changeExport so refreshes don't re-compute).
+    //
+    // loadAlchemiconPack() still pre-warms edited items before editApplicationsBatch()
+    // because those new PackageInfoStructs may have a null cachedListBitmap if the
+    // original app's listBitmap had never been accessed before.
+    //
     // refreshIcons() does NOT need to pre-warm: changeExport() passes the original
     // object's listBitmap through cachedListBitmap, so the lazy property on each
     // new PackageInfoStruct is already satisfied and pre-warming would be a no-op.
-    // These tests verify the patterns using AppKey simulations.
+    // These tests verify the patterns using CachingItem simulations.
 
     /**
      * Simulates an item with a lazy-cached value (like PackageInfoStruct.listBitmap).
@@ -466,16 +562,18 @@ class ApplicationProviderTest {
     }
 
     @Test
-    fun `pre-warming initializes lazy value before list is visible`() {
-        // Simulates: preWarmListBitmaps runs before applicationList is set
+    fun `lazy value is initialized at most once regardless of access count`() {
+        // listBitmap is a lazy property: computed on first access, cached forever.
+        // Without preWarmListBitmaps, the computation happens on the main thread
+        // during the first scroll.  This test confirms that once computed it is never
+        // recomputed, so subsequent scroll frames are free of allocation pressure.
         val items = (0 until 500).map { CachingItem(it) }
 
-        // Pre-warm (like preWarmListBitmaps does)
+        // First access — computation happens here (main thread during scroll)
         for (item in items) {
-            item.cachedValue // trigger lazy init
+            item.cachedValue
         }
 
-        // Verify all items are initialized exactly once
         for (item in items) {
             assertEquals(
                 "Item ${item.id} should be initialized exactly once",
@@ -485,7 +583,7 @@ class ApplicationProviderTest {
 
         // Subsequent access should not re-initialize
         for (item in items) {
-            item.cachedValue // access again
+            item.cachedValue
             assertEquals(
                 "Item ${item.id} should still be initialized exactly once after re-access",
                 1, item.initCount
@@ -494,8 +592,50 @@ class ApplicationProviderTest {
     }
 
     @Test
+    fun `initializeApplications does not pre-warm list bitmaps upfront`() {
+        // initializeApplications() was changed to remove preWarmListBitmaps.
+        // The old pattern:
+        //   val appList = apps.toList()
+        //   preWarmListBitmaps(appList)   // ← removed: allocated 500+ bitmaps at once
+        //   applicationList = appList
+        //
+        // The new pattern:
+        //   applicationList = apps.toList()  // listBitmap computed lazily on first scroll
+        //
+        // This test verifies that without explicit pre-warming, items are still
+        // correctly initialized on first access — just not all at once at startup.
+        val items = (0 until 500).map { CachingItem(it) }
+
+        // Simulate new initializeApplications: assign list immediately, no pre-warm
+        val applicationList = items.toList()
+
+        // No items should be initialized yet (lazy, not pre-warmed)
+        for (item in applicationList) {
+            assertEquals(
+                "Item ${item.id} should not be initialized before first scroll access",
+                0, item.initCount
+            )
+        }
+
+        // Simulate first scroll: only the first 20 visible items are accessed
+        for (i in 0 until minOf(20, applicationList.size)) {
+            applicationList[i].cachedValue
+        }
+
+        for (i in 0 until minOf(20, applicationList.size)) {
+            assertEquals("Scrolled-to item $i should now be initialized", 1, applicationList[i].initCount)
+        }
+        for (i in 20 until applicationList.size) {
+            assertEquals("Off-screen item $i should still be uninitialized", 0, applicationList[i].initCount)
+        }
+    }
+
+    @Test
     fun `pre-warming edits covers all new items before batch apply`() {
-        // Simulates: preWarmEditBitmaps runs before editApplicationsBatch
+        // Simulates: preWarmEditBitmaps runs before editApplicationsBatch in
+        // loadAlchemiconPack.  Only the subset of apps that have saved icons in the
+        // DB receive new PackageInfoStruct objects, so this is far less memory
+        // intensive than pre-warming all apps.
         val originals = (0 until 500).map { CachingItem(it) }
 
         // Some items get edited (like loadAlchemiconPack creating new PackageInfoStructs)
@@ -521,39 +661,6 @@ class ApplicationProviderTest {
                 "Edited item at $index should be pre-warmed",
                 1, result[index].initCount
             )
-        }
-    }
-
-    @Test
-    fun `pre-warming runs before list assignment in initialization pattern`() {
-        // Simulates the exact pattern from initializeApplications():
-        //   val appList = apps.toList()
-        //   preWarmListBitmaps(appList)
-        //   applicationList = appList
-        var listSetAt = -1
-        val events = mutableListOf<String>()
-
-        val items = (0 until 100).map { CachingItem(it) }
-
-        // Pre-warm happens before "assignment"
-        events.add("pre_warm_start")
-        for (item in items) {
-            item.cachedValue
-        }
-        events.add("pre_warm_end")
-
-        // Simulate list assignment
-        events.add("list_assigned")
-        listSetAt = events.size
-
-        assertTrue(
-            "Pre-warming must complete before list is assigned",
-            events.indexOf("pre_warm_end") < events.indexOf("list_assigned")
-        )
-
-        // All items should be initialized before the list was "visible"
-        for (item in items) {
-            assertEquals(1, item.initCount)
         }
     }
 
